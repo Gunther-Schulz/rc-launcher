@@ -11,6 +11,8 @@ services:
       dockerfile: Dockerfile
     environment:
       - SERVICE_FQDN_RCL_8080
+      - RCL_USERNAME=admin
+      - RCL_PASSWORD=$SERVICE_PASSWORD_ADMIN
     expose:
       - "8080"
     labels:
