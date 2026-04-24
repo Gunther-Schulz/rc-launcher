@@ -152,7 +152,9 @@
     {% elif state.status == "failed" %}
       <div class="card err">
         <strong>Login failed.</strong>
-        {% if state.error %}<p style="margin: 0.4em 0 0">{{ state.error }}</p>{% endif %}
+        {% if state.error %}
+          <pre style="margin: 0.5em 0 0; white-space: pre-wrap; font-size: 0.85em; color: var(--err);">{{ state.error }}</pre>
+        {% endif %}
       </div>
       <form method="post" action="/claude/login/start">
         <button type="submit" class="primary">Try again</button>

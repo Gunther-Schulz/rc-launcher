@@ -112,26 +112,30 @@ def _cleanup() -> None:
 
 
 async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
-    """Read pty stdout until we match an OAuth URL or deadline expires."""
-    loop = asyncio.get_event_loop()
+    """Read pty stdout until we match an OAuth URL or deadline expires.
+
+    Non-blocking read with short polling interval — otherwise the read
+    would block an executor thread indefinitely if claude writes nothing.
+    """
+    os.set_blocking(master_fd, False)
     while time.time() < deadline:
         try:
-            chunk = await loop.run_in_executor(
-                None, lambda: os.read(master_fd, 4096)
-            )
+            chunk = os.read(master_fd, 4096)
+        except BlockingIOError:
+            chunk = None
         except OSError:
             return None
-        if not chunk:
+        if chunk == b"":
+            # pty closed — process exited
             return None
-        _state.stdout_buf += chunk
-        text = _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
-        # Re-join visually wrapped URLs (pty is 80 cols by default, URLs
-        # are ~300 chars, so hard line breaks land mid-URL).
-        unwrapped = re.sub(r"(?<=[^\s])\r?\n(?=[^\s/])", "", text)
-        match = OAUTH_URL_RE.search(unwrapped)
-        if match:
-            return match.group(0)
-        await asyncio.sleep(0.05)
+        if chunk:
+            _state.stdout_buf += chunk
+            text = _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
+            unwrapped = re.sub(r"(?<=[^\s])\r?\n(?=[^\s/])", "", text)
+            match = OAUTH_URL_RE.search(unwrapped)
+            if match:
+                return match.group(0)
+        await asyncio.sleep(0.1)
     return None
 
 
@@ -187,10 +191,15 @@ async def start_login() -> LoginState:
     deadline = time.time() + URL_WAIT_TIMEOUT
     url = await _read_until_url(master, deadline)
     if url is None:
+        # Capture a tail of whatever claude did emit for debugging.
+        tail = (
+            _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
+        )[-1500:]
+        exit_code = _state.process.poll() if _state.process else None
         _state.status = "failed"
         _state.error = (
-            f"OAuth URL did not appear within {URL_WAIT_TIMEOUT}s. "
-            "Claude may have exited early — check server logs."
+            f"OAuth URL did not appear within {URL_WAIT_TIMEOUT}s "
+            f"(claude exit code={exit_code!r}). Captured output:\n{tail}"
         )
         _state.finished_at = time.time()
         _cleanup()
@@ -226,21 +235,21 @@ async def submit_code(code: str) -> LoginState:
         _cleanup()
         return _state
 
-    # Drain stdout while waiting for claude to exit.
-    loop = asyncio.get_event_loop()
+    # Drain stdout (non-blocking) while waiting for claude to exit.
+    os.set_blocking(_state.master_fd, False)
     deadline = time.time() + CODE_WAIT_TIMEOUT
     while time.time() < deadline:
         if _state.process.poll() is not None:
             break
         try:
-            chunk = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: os.read(_state.master_fd, 4096)),
-                timeout=0.5,
-            )
-        except (asyncio.TimeoutError, OSError):
-            continue
+            chunk = os.read(_state.master_fd, 4096)
+        except BlockingIOError:
+            chunk = None
+        except OSError:
+            break
         if chunk:
             _state.stdout_buf += chunk
+        await asyncio.sleep(0.1)
 
     if _state.process.poll() is None:
         _state.status = "failed"
