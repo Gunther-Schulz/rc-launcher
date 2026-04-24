@@ -15,7 +15,8 @@ ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     TERM=xterm-256color \
     HOME=/home/node \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PATH="/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # tmux for session backing; python venv tooling; Claude Code CLI.
 RUN apt-get update \
@@ -37,8 +38,14 @@ RUN /usr/bin/install -m 0755 -d /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Passwordless sudo for node (idempotent).
-RUN echo 'node ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/node \
+# Passwordless sudo for node. Also override sudo's secure_path so that
+# `claude`, `gh`, and other /usr/local/share/npm-global/bin tools are on
+# PATH for the node user — otherwise sudo's default secure_path strips
+# them out even with `-E`.
+RUN printf '%s\n' \
+    'node ALL=(ALL) NOPASSWD: ALL' \
+    'Defaults:node secure_path="/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+    > /etc/sudoers.d/node \
     && chmod 0440 /etc/sudoers.d/node
 
 # Python venv with everything the app needs.

@@ -25,6 +25,7 @@ import asyncio
 import os
 import pty
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -33,6 +34,11 @@ from pathlib import Path
 from typing import Optional
 
 CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
+
+# Resolve `claude` once at import time so per-request spawns don't depend
+# on whatever PATH subprocess inherits. Fallback to the devcontainer
+# default install location.
+CLAUDE_BIN = shutil.which("claude") or "/usr/local/share/npm-global/bin/claude"
 # claude emits an authorize URL either on claude.com or claude.ai; both
 # have been seen in the wild depending on account migration status.
 OAUTH_URL_RE = re.compile(
@@ -158,7 +164,7 @@ async def start_login() -> LoginState:
     env["TERM"] = "dumb"  # suppress most ANSI; our stripper is defense-in-depth
     try:
         process = subprocess.Popen(
-            ["claude", "login"],
+            [CLAUDE_BIN, "login"],
             stdin=slave,
             stdout=slave,
             stderr=slave,
