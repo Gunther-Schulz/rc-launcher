@@ -22,18 +22,26 @@ restarts mid-flow, state is dropped; user just restarts the login.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import pty
 import re
 import shutil
 import signal
+import struct
 import subprocess
+import termios
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
+# Claude also keeps a user-level config outside the .claude dir and a
+# backups/ subdir. If login is starting fresh we wipe these so claude
+# doesn't hang on a "config-not-found, restore from backup?" prompt.
+CLAUDE_JSON = Path.home() / ".claude.json"
+CLAUDE_BACKUPS_DIR = Path.home() / ".claude" / "backups"
 
 # Resolve `claude` once at import time so per-request spawns don't depend
 # on whatever PATH subprocess inherits. Fallback to the devcontainer
@@ -52,8 +60,12 @@ _CSI_RE = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]")
 _OSC_RE = re.compile(rb"\x1b\][^\x07]*\x07")
 
 # read timeouts (seconds) — generous so slow hosts aren't a problem
-URL_WAIT_TIMEOUT = 30
+URL_WAIT_TIMEOUT = 60
 CODE_WAIT_TIMEOUT = 30
+
+# pty geometry — wide so claude doesn't hard-wrap the OAuth URL mid-char
+PTY_COLS = 200
+PTY_ROWS = 50
 
 
 @dataclass
@@ -161,11 +173,30 @@ async def start_login() -> LoginState:
 
     # Clear any terminal state from a prior attempt.
     _cleanup()
+    # Purge residual claude state so login starts clean. Otherwise claude
+    # hangs on a "config not found — restore from backup?" interactive
+    # prompt from leftovers on persistent volumes.
+    try:
+        CLAUDE_JSON.unlink()
+    except FileNotFoundError:
+        pass
+    if CLAUDE_BACKUPS_DIR.exists():
+        shutil.rmtree(CLAUDE_BACKUPS_DIR, ignore_errors=True)
+
     _state = LoginState(status="awaiting_code", started_at=time.time())
 
     master, slave = pty.openpty()
+    # Widen the pty before claude starts; it reads dimensions at spawn
+    # via TIOCGWINSZ and sizes its output accordingly.
+    fcntl.ioctl(
+        master,
+        termios.TIOCSWINSZ,
+        struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0),
+    )
     env = dict(os.environ)
     env["TERM"] = "dumb"  # suppress most ANSI; our stripper is defense-in-depth
+    env["COLUMNS"] = str(PTY_COLS)
+    env["LINES"] = str(PTY_ROWS)
     try:
         process = subprocess.Popen(
             [CLAUDE_BIN, "login"],
