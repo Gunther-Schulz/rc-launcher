@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>rc-launcher</title>
+  <style>
+    :root {
+      --bg: #0f1012;
+      --surface: #1a1c20;
+      --border: #2a2d33;
+      --text: #e8e9ea;
+      --muted: #898d94;
+      --accent: #7dd3fc;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
+    }
+    main {
+      max-width: 40em;
+      margin: 0 auto;
+      padding: max(1.25em, env(safe-area-inset-top)) 1.25em env(safe-area-inset-bottom);
+    }
+    h1 { font-weight: 600; font-size: 1.6em; margin: 0 0 0.25em; }
+    .tag {
+      display: inline-block;
+      font-size: 0.72em;
+      padding: 0.15em 0.5em;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      vertical-align: middle;
+      margin-left: 0.25em;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.1em 1.2em;
+      margin: 1em 0;
+    }
+    .muted { color: var(--muted); }
+    code {
+      background: #222;
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    ul { padding-left: 1.2em; margin: 0.5em 0; }
+    li { margin: 0.25em 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>rc-launcher <span class="tag">phase {{ phase }}</span></h1>
+    <p class="muted">Claude Remote Control session launcher — mobile-first, Coolify-deployed.</p>
+
+    <div class="card">
+      <strong>Status:</strong> skeleton deploy up.
+      <ul>
+        <li>Auth: handled by Coolify / Traefik at the edge.</li>
+        <li>Next (phase 2): <code>claude login</code> OAuth wrap.</li>
+        <li>Then: <code>gh auth login</code> wrap, repo list, session launch.</li>
+      </ul>
+    </div>
+
+    <p class="muted" style="font-size: 0.85em">
+      Health endpoint: <code>/api/health</code>
+    </p>
+  </main>
+</body>
+</html>
