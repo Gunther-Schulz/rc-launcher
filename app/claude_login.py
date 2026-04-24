@@ -126,10 +126,14 @@ def _cleanup() -> None:
 async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
     """Read pty stdout until we match an OAuth URL or deadline expires.
 
-    Non-blocking read with short polling interval — otherwise the read
-    would block an executor thread indefinitely if claude writes nothing.
+    Claude Code's first-run flow (v2.1.119) prompts for theme selection
+    before showing the OAuth URL. We accept defaults by pressing Enter
+    periodically while waiting for the URL to appear — harmless once
+    login output starts (extra Enter just becomes an empty stdin line).
     """
     os.set_blocking(master_fd, False)
+    last_enter = 0.0
+    ENTER_EVERY = 2.0
     while time.time() < deadline:
         try:
             chunk = os.read(master_fd, 4096)
@@ -147,6 +151,14 @@ async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
             match = OAUTH_URL_RE.search(unwrapped)
             if match:
                 return match.group(0)
+        # Periodically press Enter to accept any default on a setup prompt.
+        now = time.time()
+        if now - last_enter > ENTER_EVERY:
+            try:
+                os.write(master_fd, b"\r")
+            except OSError:
+                pass
+            last_enter = now
         await asyncio.sleep(0.1)
     return None
 
