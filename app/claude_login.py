@@ -63,8 +63,9 @@ _OSC_RE = re.compile(rb"\x1b\][^\x07]*\x07")
 URL_WAIT_TIMEOUT = 60
 CODE_WAIT_TIMEOUT = 30
 
-# pty geometry — wide so claude doesn't hard-wrap the OAuth URL mid-char
-PTY_COLS = 200
+# pty geometry — wide so claude doesn't hard-wrap the OAuth URL mid-char.
+# URLs are ~450 chars with state+challenge+scopes, so 1000 gives margin.
+PTY_COLS = 1000
 PTY_ROWS = 50
 
 
