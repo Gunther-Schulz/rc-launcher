@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Claude login — rc-launcher</title>
+  <style>
+    :root {
+      --bg: #0f1012;
+      --surface: #1a1c20;
+      --border: #2a2d33;
+      --text: #e8e9ea;
+      --muted: #898d94;
+      --accent: #7dd3fc;
+      --accent-bg: #0b2a3a;
+      --ok: #86efac;
+      --ok-bg: #0e2e1e;
+      --err: #fca5a5;
+      --err-bg: #2e1515;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
+    }
+    main {
+      max-width: 40em;
+      margin: 0 auto;
+      padding: max(1.25em, env(safe-area-inset-top)) 1.25em env(safe-area-inset-bottom);
+    }
+    h1 { font-weight: 600; font-size: 1.6em; margin: 0 0 0.25em; }
+    a.back {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9em;
+    }
+    a.back:hover { text-decoration: underline; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.1em 1.2em;
+      margin: 1em 0;
+    }
+    .card.ok { background: var(--ok-bg); border-color: #1e5432; }
+    .card.err { background: var(--err-bg); border-color: #5b2323; }
+    .muted { color: var(--muted); }
+    code {
+      background: #222;
+      padding: 0.15em 0.4em;
+      border-radius: 4px;
+      font-size: 0.9em;
+      word-break: break-all;
+    }
+    button, .btn {
+      display: inline-block;
+      padding: 0.8em 1.2em;
+      font: inherit;
+      font-weight: 500;
+      color: var(--text);
+      background: #2a2d33;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    button.primary, .btn.primary {
+      background: var(--accent-bg);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    button:active, .btn:active { transform: scale(0.98); }
+    input[type=text] {
+      width: 100%;
+      padding: 0.8em 1em;
+      font: inherit;
+      color: var(--text);
+      background: #0a0b0c;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      -webkit-appearance: none;
+    }
+    .url-link {
+      display: block;
+      padding: 1em;
+      margin: 0.5em 0 1em;
+      background: var(--accent-bg);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      color: var(--accent);
+      word-break: break-all;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.85em;
+      text-decoration: none;
+    }
+    form { margin: 1em 0 0; }
+    .row { display: flex; gap: 0.5em; align-items: center; }
+    .row > form { margin: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← back</a>
+    <h1>Claude login</h1>
+
+    {% if logged_in %}
+      <div class="card ok">
+        <strong>✓ Logged in to Claude.</strong>
+        <p class="muted" style="margin: 0.5em 0 0; font-size: 0.9em">
+          Credentials persist in the <code>claude</code> volume. Sessions
+          spawned by rc-launcher reuse this login.
+        </p>
+      </div>
+      <form method="post" action="/claude/logout">
+        <button type="submit">Log out</button>
+      </form>
+    {% elif state.status == "awaiting_code" and state.url %}
+      <div class="card">
+        <strong>Step 1.</strong> Open this URL in your browser and authorize:
+        <a class="url-link" href="{{ state.url }}" target="_blank" rel="noopener">
+          {{ state.url }}
+        </a>
+        Tap the link above (or long-press to copy).
+      </div>
+      <div class="card">
+        <strong>Step 2.</strong> Paste the code Claude gives you back here:
+        <form method="post" action="/claude/login/code">
+          <input type="text" name="code" placeholder="paste code here"
+                 inputmode="text" autocapitalize="off" autocorrect="off"
+                 autocomplete="off" spellcheck="false" required>
+          <div style="margin-top: 0.8em" class="row">
+            <button type="submit" class="primary">Submit code</button>
+            <span class="muted" style="font-size: 0.85em">
+              Completes login and saves credentials.
+            </span>
+          </div>
+        </form>
+      </div>
+      <form method="post" action="/claude/login/start">
+        <button type="submit">Restart (get a fresh URL)</button>
+      </form>
+    {% elif state.status == "submitting" %}
+      <div class="card">
+        <strong>Submitting code…</strong>
+        <p class="muted" style="margin: 0.5em 0 0">Verifying with Claude…</p>
+      </div>
+    {% elif state.status == "failed" %}
+      <div class="card err">
+        <strong>Login failed.</strong>
+        {% if state.error %}<p style="margin: 0.4em 0 0">{{ state.error }}</p>{% endif %}
+      </div>
+      <form method="post" action="/claude/login/start">
+        <button type="submit" class="primary">Try again</button>
+      </form>
+    {% else %}
+      <p class="muted">
+        Not logged in yet. Clicking the button spawns <code>claude login</code>
+        on the server and captures its OAuth URL.
+      </p>
+      <form method="post" action="/claude/login/start">
+        <button type="submit" class="primary">Log in to Claude</button>
+      </form>
+    {% endif %}
+  </main>
+</body>
+</html>

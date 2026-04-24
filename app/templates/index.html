@@ -13,6 +13,8 @@
       --text: #e8e9ea;
       --muted: #898d94;
       --accent: #7dd3fc;
+      --accent-bg: #0b2a3a;
+      --ok: #86efac;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -29,6 +31,7 @@
       padding: max(1.25em, env(safe-area-inset-top)) 1.25em env(safe-area-inset-bottom);
     }
     h1 { font-weight: 600; font-size: 1.6em; margin: 0 0 0.25em; }
+    h2 { font-weight: 600; font-size: 1.1em; margin: 1.5em 0 0.5em; }
     .tag {
       display: inline-block;
       font-size: 0.72em;
@@ -46,34 +49,42 @@
       padding: 1.1em 1.2em;
       margin: 1em 0;
     }
-    .muted { color: var(--muted); }
-    code {
-      background: #222;
-      padding: 0.15em 0.4em;
-      border-radius: 4px;
-      font-size: 0.9em;
+    .card a {
+      color: var(--accent);
+      text-decoration: none;
     }
-    ul { padding-left: 1.2em; margin: 0.5em 0; }
-    li { margin: 0.25em 0; }
+    .card a:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    .status { font-size: 0.9em; color: var(--muted); }
+    .status.ok { color: var(--ok); }
+    code { background: #222; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
   </style>
 </head>
 <body>
   <main>
     <h1>rc-launcher <span class="tag">phase {{ phase }}</span></h1>
-    <p class="muted">Claude Remote Control session launcher — mobile-first, Coolify-deployed.</p>
+    <p class="muted">Claude Remote Control session launcher.</p>
 
+    <h2>Setup</h2>
     <div class="card">
-      <strong>Status:</strong> skeleton deploy up.
-      <ul>
-        <li>Auth: handled by Coolify / Traefik at the edge.</li>
-        <li>Next (phase 2): <code>claude login</code> OAuth wrap.</li>
-        <li>Then: <code>gh auth login</code> wrap, repo list, session launch.</li>
-      </ul>
+      <a href="/claude">Claude login →</a>
+      <div class="status {% if claude_logged_in %}ok{% endif %}" style="margin-top: 0.4em">
+        {% if claude_logged_in %}
+          ✓ Logged in; credentials persisted.
+        {% else %}
+          Not logged in yet.
+        {% endif %}
+      </div>
     </div>
 
-    <p class="muted" style="font-size: 0.85em">
-      Health endpoint: <code>/api/health</code>
-    </p>
+    <h2>Coming in later phases</h2>
+    <div class="card muted">
+      <ul style="padding-left: 1.2em; margin: 0">
+        <li>Phase 3: <code>gh auth login</code> device-code wrap.</li>
+        <li>Phase 4: repo list, start session.</li>
+        <li>Phase 5: session management + RC URLs.</li>
+      </ul>
+    </div>
   </main>
 </body>
 </html>
