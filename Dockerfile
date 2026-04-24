@@ -17,11 +17,10 @@ ENV LANG=en_US.UTF-8 \
     HOME=/home/node \
     PYTHONUNBUFFERED=1
 
-# tmux for session backing; socat as loopback proxy (rate-limit hygiene,
-# same reason as aoe-coolify); python venv tooling; Claude Code CLI.
+# tmux for session backing; python venv tooling; Claude Code CLI.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        tmux ripgrep fzf jq socat python3-venv ca-certificates \
+        tmux ripgrep fzf jq python3-venv ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code
 
@@ -72,13 +71,9 @@ echo "=== end boot ==="
 # Repair volume ownership.
 sudo chown -R node:node /home/node /workspace /var/lib/rcl 2>/dev/null || true
 
-# socat loopback, same pattern as aoe-coolify. Keeps traefik X-Forwarded-For
-# trustable for any per-IP features we add (rate limiting, audit logs).
-socat TCP-LISTEN:8080,fork,reuseaddr TCP:127.0.0.1:8081 &
-
 exec sudo -u node -E HOME=/home/node \
     /opt/rcl/bin/uvicorn --app-dir /opt/rcl app.main:app \
-    --host 127.0.0.1 --port 8081
+    --host 0.0.0.0 --port 8080
 BASH
 
 RUN chmod +x /entrypoint.sh
