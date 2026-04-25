@@ -185,12 +185,16 @@ async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
 
 
 async def start_login() -> LoginState:
+    """Always spawn a fresh `claude login`. Any in-flight process is killed.
+
+    Idempotency was a previous design choice but it broke the "Restart
+    (get a fresh URL)" button, which hits this endpoint expecting a new
+    URL each time. Cleanup-then-spawn is the right behavior.
+    """
     global _state
 
-    if _state.status == "awaiting_code":
-        _log("start: already in awaiting_code, returning existing state")
-        return _state
-
+    if _state.process is not None:
+        _log("start: prior process exists; cleaning up before fresh spawn")
     _cleanup()
     # Purge residual claude state so login starts clean.
     purged = []
