@@ -62,6 +62,12 @@ URL_WAIT_TIMEOUT = 60
 # from stdin and validates it against Anthropic. We give 30s as a
 # generous-but-still-fast cap.
 CODE_WAIT_TIMEOUT = 30
+# Abandoned login flows (URL fetched but no code submitted) hold a pty
+# and a claude process forever. Watchdog kills any awaiting_code state
+# older than this and resets to idle.
+ABANDON_TIMEOUT = 10 * 60  # 10 minutes
+# `claude --print` smoke test for verify endpoint.
+VERIFY_TIMEOUT = 20
 
 PTY_COLS = 1000
 PTY_ROWS = 50
@@ -97,12 +103,82 @@ class LoginState:
 _state = LoginState()
 
 
+def _check_watchdog() -> None:
+    """Kill any awaiting_code flow older than ABANDON_TIMEOUT."""
+    global _state
+    if (
+        _state.status == "awaiting_code"
+        and _state.started_at
+        and time.time() - _state.started_at > ABANDON_TIMEOUT
+    ):
+        age = time.time() - _state.started_at
+        _log(f"watchdog: awaiting_code is {age:.0f}s old, abandoning")
+        _cleanup()
+        _state = LoginState(
+            status="failed",
+            error=(
+                f"Login flow abandoned ({age / 60:.0f} min idle). "
+                "Click 'Log in to Claude' to start over."
+            ),
+            finished_at=time.time(),
+        )
+
+
 def current_state() -> LoginState:
+    _check_watchdog()
     return _state
 
 
 def logged_in() -> bool:
     return CREDENTIALS_FILE.exists()
+
+
+async def verify() -> tuple[bool, str]:
+    """Make a real Claude API call with the stored credentials.
+
+    Spawns `claude --print` with a tiny prompt; success = response received,
+    failure = no response within VERIFY_TIMEOUT or claude exited with error.
+
+    Returns (ok, message).
+    """
+    if not logged_in():
+        return False, "Not logged in (no credentials file)."
+
+    _log("verify: spawning claude --print to confirm credentials work")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN,
+            "--print",
+            "Reply with the single word OK.",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "TERM": "dumb", "HOME": str(Path.home())},
+        )
+    except FileNotFoundError as exc:
+        return False, f"could not spawn claude: {exc}"
+
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(
+            proc.communicate(), timeout=VERIFY_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        _log(f"verify: timeout after {VERIFY_TIMEOUT}s")
+        return False, f"claude --print did not respond within {VERIFY_TIMEOUT}s"
+
+    stdout = stdout_b.decode("utf-8", errors="replace").strip()
+    stderr = stderr_b.decode("utf-8", errors="replace").strip()
+    _log(
+        f"verify: exit={proc.returncode} stdout_len={len(stdout)} stderr_len={len(stderr)}"
+    )
+    if proc.returncode == 0 and stdout:
+        return True, f"claude responded: {stdout[:200]}"
+    return False, (
+        f"claude exited code={proc.returncode}. "
+        f"stdout: {stdout[:300] or '(empty)'}\n"
+        f"stderr: {stderr[:300] or '(empty)'}"
+    )
 
 
 def _strip_ansi(data: bytes) -> bytes:

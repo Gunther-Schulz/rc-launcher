@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
+  {% if state.status == "submitting" %}
+  <meta http-equiv="refresh" content="2">
+  {% endif %}
   <title>Claude login — rc-launcher</title>
   <style>
     :root {
@@ -116,9 +119,26 @@
           spawned by rc-launcher reuse this login.
         </p>
       </div>
-      <form method="post" action="/claude/logout">
-        <button type="submit">Log out</button>
-      </form>
+      {% if verify_ok is not none %}
+      <div class="card {% if verify_ok %}ok{% else %}err{% endif %}">
+        <strong>{% if verify_ok %}✓ Verify passed{% else %}✗ Verify failed{% endif %}</strong>
+        {% if verify_msg %}
+        <pre style="margin: 0.5em 0 0; white-space: pre-wrap; font-size: 0.85em">{{ verify_msg }}</pre>
+        {% endif %}
+      </div>
+      {% endif %}
+      <div class="row">
+        <form method="post" action="/claude/verify">
+          <button type="submit" class="primary">Verify (call Claude)</button>
+        </form>
+        <form method="post" action="/claude/logout">
+          <button type="submit">Log out</button>
+        </form>
+      </div>
+      <p class="muted" style="font-size: 0.85em; margin-top: 1em">
+        <em>Verify</em> spawns <code>claude --print</code> with these credentials and
+        confirms a real round-trip to Anthropic. Costs a few tokens.
+      </p>
     {% elif state.status == "awaiting_code" and state.url %}
       <div class="card">
         <strong>Step 1.</strong> Open this URL in your browser and authorize:
@@ -144,10 +164,15 @@
       <form method="post" action="/claude/login/start">
         <button type="submit">Restart (get a fresh URL)</button>
       </form>
+      <p class="muted" style="font-size: 0.85em; margin-top: 0.5em">
+        Use Restart if your URL was rejected or you took longer than ~10 min.
+      </p>
     {% elif state.status == "submitting" %}
       <div class="card">
         <strong>Submitting code…</strong>
-        <p class="muted" style="margin: 0.5em 0 0">Verifying with Claude…</p>
+        <p class="muted" style="margin: 0.5em 0 0">
+          Verifying with Claude. This page auto-refreshes every 2s until done.
+        </p>
       </div>
     {% elif state.status == "failed" %}
       <div class="card err">

@@ -12,6 +12,8 @@ import os
 import secrets
 from pathlib import Path
 
+from typing import Optional
+
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -71,15 +73,31 @@ def health(_user: str = Depends(require_auth)) -> JSONResponse:
 
 
 @app.get("/claude", response_class=HTMLResponse)
-def claude_page(request: Request, _user: str = Depends(require_auth)):
+def claude_page(
+    request: Request,
+    _user: str = Depends(require_auth),
+    verify_ok: Optional[bool] = None,
+    verify_msg: Optional[str] = None,
+):
     return templates.TemplateResponse(
         request=request,
         name="claude.html",
         context={
             "logged_in": claude_login.logged_in(),
             "state": claude_login.current_state(),
+            "verify_ok": verify_ok,
+            "verify_msg": verify_msg,
         },
     )
+
+
+@app.post("/claude/verify")
+async def claude_verify(_user: str = Depends(require_auth)):
+    ok, msg = await claude_login.verify()
+    # Pass result via query string so the redirected GET can render it.
+    from urllib.parse import urlencode
+    qs = urlencode({"verify_ok": "1" if ok else "0", "verify_msg": msg})
+    return RedirectResponse(url=f"/claude?{qs}", status_code=303)
 
 
 @app.post("/claude/login/start")
