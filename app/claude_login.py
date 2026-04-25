@@ -61,7 +61,7 @@ _OSC_RE = re.compile(rb"\x1b\][^\x07]*\x07")
 
 # read timeouts (seconds) — generous so slow hosts aren't a problem
 URL_WAIT_TIMEOUT = 60
-CODE_WAIT_TIMEOUT = 30
+CODE_WAIT_TIMEOUT = 90
 
 # pty geometry — wide so claude doesn't hard-wrap the OAuth URL mid-char.
 # URLs are ~450 chars with state+challenge+scopes, so 1000 gives margin.
@@ -279,10 +279,18 @@ async def submit_code(code: str) -> LoginState:
         _cleanup()
         return _state
 
-    # Drain stdout (non-blocking) while waiting for claude to exit.
+    # Drain stdout (non-blocking) while waiting for claude to either exit
+    # or write the credentials file. Keep auto-Entering so any post-login
+    # setup prompt (model picker, etc.) accepts its default.
     os.set_blocking(_state.master_fd, False)
     deadline = time.time() + CODE_WAIT_TIMEOUT
+    last_enter = time.time()  # don't immediately Enter; give claude time to read the code
+    ENTER_EVERY = 2.0
     while time.time() < deadline:
+        # Success can land before the process exits (claude may stay
+        # interactive after writing creds); detect either way.
+        if logged_in():
+            break
         if _state.process.poll() is not None:
             break
         try:
@@ -293,24 +301,35 @@ async def submit_code(code: str) -> LoginState:
             break
         if chunk:
             _state.stdout_buf += chunk
+        now = time.time()
+        if now - last_enter > ENTER_EVERY:
+            try:
+                os.write(_state.master_fd, b"\r")
+            except OSError:
+                pass
+            last_enter = now
         await asyncio.sleep(0.1)
 
-    if _state.process.poll() is None:
-        _state.status = "failed"
-        _state.error = f"claude did not finish within {CODE_WAIT_TIMEOUT}s"
-        _cleanup()
-        return _state
-
-    # success is detected by the existence of the credentials file on disk.
+    # Final state check.
     if logged_in():
         _state.status = "success"
         _state.error = None
     else:
+        tail = (
+            _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
+        )[-1500:]
+        exit_code = _state.process.poll() if _state.process else None
         _state.status = "failed"
-        _state.error = (
-            "claude exited without writing credentials. "
-            "Likely an invalid or expired code; try again."
-        )
+        if exit_code is None:
+            _state.error = (
+                f"claude did not finish within {CODE_WAIT_TIMEOUT}s "
+                f"and credentials file was not written. Captured output:\n{tail}"
+            )
+        else:
+            _state.error = (
+                f"claude exited (code={exit_code}) without writing credentials. "
+                f"Likely an invalid or expired code. Captured output:\n{tail}"
+            )
     _state.finished_at = time.time()
     _cleanup()
     return _state
