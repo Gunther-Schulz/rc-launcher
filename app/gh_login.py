@@ -202,15 +202,20 @@ async def _read_until_code_and_url(master_fd: int, deadline: float) -> tuple[Opt
     """Read stdout until we have BOTH the device code and the URL, or timeout.
 
     gh asks 'Authenticate Git with your GitHub credentials? (Y/n)' before
-    printing the device code; auto-Enter every 2s accepts that default
-    (and any other Y/n we haven't preempted with flags).
+    printing the device code. We MUST wait for the prompt to appear in
+    stdout before responding — pre-emptive input gets BELed back and
+    seems to put gh into a state where it stops reading further input.
     """
     os.set_blocking(master_fd, False)
-    last_enter = 0.0
     last_log_size = 0
-    ENTER_EVERY = 2.0
     code: Optional[str] = None
     url: Optional[str] = None
+    answered_prompts: set[str] = set()  # tracker so we don't re-send the same answer
+    PROMPT_PATTERNS = [
+        # (regex_to_match_in_stdout, response_bytes, label_for_dedup)
+        (re.compile(r"Authenticate Git with your GitHub credentials\?\s*\(Y/n\)"),
+         b"y\r", "auth-git"),
+    ]
     while time.time() < deadline:
         try:
             chunk = os.read(master_fd, 4096)
@@ -229,6 +234,17 @@ async def _read_until_code_and_url(master_fd: int, deadline: float) -> tuple[Opt
                 _log(f"start: +{len(new_bytes)}B (total {len(_state.stdout_buf)}B): {_safe_preview(new_bytes)}")
                 last_log_size = len(_state.stdout_buf)
             text = _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
+            # Respond to prompts ONLY when they actually appear in stdout
+            for prompt_re, response, label in PROMPT_PATTERNS:
+                if label in answered_prompts:
+                    continue
+                if prompt_re.search(text):
+                    try:
+                        os.write(master_fd, response)
+                        _log(f"start: prompt {label!r} detected; responded with {response!r}")
+                        answered_prompts.add(label)
+                    except OSError as e:
+                        _log(f"start: failed to respond to {label!r}: {e}")
             if code is None:
                 m = GH_CODE_RE.search(text)
                 if m:
@@ -241,17 +257,6 @@ async def _read_until_code_and_url(master_fd: int, deadline: float) -> tuple[Opt
                     _log(f"start: URL extracted: {url}")
             if code and url:
                 return code, url
-        now = time.time()
-        if now - last_enter > ENTER_EVERY:
-            try:
-                # gh prompts include `(Y/n)` defaults but the prompt library
-                # echoes BEL (\x07) for plain Enter — explicit "y\r" is what
-                # the user would actually type.
-                os.write(master_fd, b"y\r")
-                _log("start: auto 'y\\r' sent")
-            except OSError as e:
-                _log(f"start: auto-Enter failed ({e})")
-            last_enter = now
         await asyncio.sleep(0.1)
     _log(f"start: deadline reached after {URL_WAIT_TIMEOUT}s, code={code!r}, url={url!r}")
     return code, url
