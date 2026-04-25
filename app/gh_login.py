@@ -244,8 +244,11 @@ async def _read_until_code_and_url(master_fd: int, deadline: float) -> tuple[Opt
         now = time.time()
         if now - last_enter > ENTER_EVERY:
             try:
-                os.write(master_fd, b"\r")
-                _log("start: auto-Enter sent")
+                # gh prompts include `(Y/n)` defaults but the prompt library
+                # echoes BEL (\x07) for plain Enter — explicit "y\r" is what
+                # the user would actually type.
+                os.write(master_fd, b"y\r")
+                _log("start: auto 'y\\r' sent")
             except OSError as e:
                 _log(f"start: auto-Enter failed ({e})")
             last_enter = now
