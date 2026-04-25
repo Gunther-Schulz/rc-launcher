@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  {% if state.status == "awaiting_authorization" %}
-  <meta http-equiv="refresh" content="3">
-  {% endif %}
   <title>GitHub login — rc-launcher</title>
   <style>
     :root {
@@ -50,7 +47,7 @@
     .card.err { background: var(--err-bg); border-color: #5b2323; }
     .muted { color: var(--muted); }
     code { background: #222; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
-    button, .btn {
+    button {
       display: inline-block;
       padding: 0.8em 1.2em;
       font: inherit;
@@ -60,44 +57,37 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       cursor: pointer;
-      text-decoration: none;
     }
-    button.primary, .btn.primary {
+    button.primary {
       background: var(--accent-bg);
       border-color: var(--accent);
       color: var(--accent);
     }
-    button:active, .btn:active { transform: scale(0.98); }
-    .url-link {
-      display: block;
-      padding: 1em;
-      margin: 0.5em 0 1em;
-      background: var(--accent-bg);
-      border: 1px solid var(--accent);
-      border-radius: 8px;
-      color: var(--accent);
-      word-break: break-all;
+    button:active { transform: scale(0.98); }
+    textarea {
+      width: 100%;
+      padding: 0.8em 1em;
+      font: inherit;
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
       font-size: 0.95em;
-      text-decoration: none;
-    }
-    .device-code {
-      display: block;
-      padding: 1em;
-      margin: 0.5em 0;
+      color: var(--text);
       background: #0a0b0c;
-      border: 2px dashed var(--accent);
+      border: 1px solid var(--border);
       border-radius: 8px;
-      color: var(--accent);
-      font-family: ui-monospace, "SF Mono", Menlo, monospace;
-      font-size: 1.6em;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-      text-align: center;
-      user-select: all;
+      -webkit-appearance: none;
+      resize: vertical;
+      min-height: 3em;
+      word-break: break-all;
     }
-    .row { display: flex; gap: 0.5em; align-items: center; }
+    ul { padding-left: 1.2em; }
+    li { margin: 0.3em 0; }
+    a { color: var(--accent); }
+    .row { display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap; }
     .row > form { margin: 0; }
+    .avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      vertical-align: middle; margin-right: 0.5em;
+    }
   </style>
 </head>
 <body>
@@ -105,63 +95,56 @@
     <a class="back" href="/">← back</a>
     <h1>GitHub login</h1>
 
-    {% if logged_in %}
+    {% if logged_in and user %}
       <div class="card ok">
-        <strong>✓ Logged in to GitHub.</strong>
+        <strong>
+          {% if user.avatar_url %}<img class="avatar" src="{{ user.avatar_url }}" alt="">{% endif %}
+          ✓ Logged in as <a href="{{ user.html_url }}" target="_blank" rel="noopener">{{ user.login }}</a>
+        </strong>
         <p class="muted" style="margin: 0.5em 0 0; font-size: 0.9em">
-          Token persists in the <code>gh-config</code> volume. rc-launcher
-          will use it to list repos and clone for sessions.
+          Token persists in the <code>data</code> volume. rc-launcher will use it
+          for repo listing and clone.
+          {% if user.scopes %}<br>Scopes: <code>{{ user.scopes | join(", ") }}</code>.{% endif %}
         </p>
       </div>
       <form method="post" action="/gh/logout">
         <button type="submit">Log out</button>
       </form>
-    {% elif state.status == "awaiting_authorization" and state.device_code and state.url %}
-      <div class="card">
-        <strong>Step 1.</strong> Tap this URL to open GitHub:
-        <a class="url-link" href="{{ state.url }}" target="_blank" rel="noopener">
-          {{ state.url }}
-        </a>
-      </div>
-      <div class="card">
-        <strong>Step 2.</strong> Paste this one-time code on GitHub:
-        <span class="device-code">{{ state.device_code }}</span>
-        <p class="muted" style="font-size: 0.85em; margin: 0.5em 0 0">
-          Tap the code to select all, then copy.
-        </p>
-      </div>
-      <div class="card">
-        <strong>Step 3.</strong> Authorize on GitHub.
-        <p class="muted" style="margin: 0.5em 0 0">
-          This page auto-refreshes every 3 seconds. When GitHub confirms,
-          you'll see <em>✓ Logged in</em> here.
-        </p>
-      </div>
-      <form method="post" action="/gh/login/start">
-        <button type="submit">Restart (get a new code)</button>
-      </form>
-      <p class="muted" style="font-size: 0.85em; margin-top: 0.5em">
-        Use Restart if your code expired (gh waits ~15 minutes).
+      <p class="muted" style="font-size: 0.85em; margin-top: 0.8em">
+        Logging out only deletes the token from this server — it does NOT
+        revoke it at GitHub. To fully revoke, go to
+        <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a>
+        and delete the entry.
       </p>
-    {% elif state.status == "failed" %}
-      <div class="card err">
-        <strong>GitHub login failed.</strong>
-        {% if state.error %}
-          <pre style="margin: 0.5em 0 0; white-space: pre-wrap; font-size: 0.85em; color: var(--err);">{{ state.error }}</pre>
-        {% endif %}
-      </div>
-      <form method="post" action="/gh/login/start">
-        <button type="submit" class="primary">Try again</button>
-      </form>
     {% else %}
-      <p class="muted">
-        Not logged in to GitHub yet. Clicking the button spawns
-        <code>gh auth login --web</code> on the server and captures the
-        device code + GitHub URL.
-      </p>
-      <form method="post" action="/gh/login/start">
-        <button type="submit" class="primary">Log in to GitHub</button>
-      </form>
+      {% if last_error %}
+      <div class="card err">
+        <strong>Login failed.</strong>
+        <p style="margin: 0.5em 0 0">{{ last_error }}</p>
+      </div>
+      {% endif %}
+      <div class="card">
+        <strong>Step 1.</strong> Generate a Personal Access Token (classic):
+        <ul style="margin: 0.5em 0">
+          <li>Open <a href="https://github.com/settings/tokens/new?scopes=repo,read:user&description=rc-launcher" target="_blank" rel="noopener">this preconfigured link</a> (already sets scopes + description) — or go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token (classic).</li>
+          <li>Required scope: <code>repo</code>. Optional: <code>read:user</code> for your name/avatar.</li>
+          <li>Expiration: your call. <em>No expiration</em> means you never have to re-paste; <em>90 days</em> is more secure.</li>
+          <li>Click <strong>Generate token</strong>, copy the value (starts with <code>ghp_</code>).</li>
+        </ul>
+      </div>
+      <div class="card">
+        <strong>Step 2.</strong> Paste the token here:
+        <form method="post" action="/gh/token" style="margin-top: 0.6em">
+          <textarea name="token" placeholder="ghp_..." autocomplete="off"
+                    autocapitalize="off" autocorrect="off" spellcheck="false" required></textarea>
+          <div style="margin-top: 0.6em" class="row">
+            <button type="submit" class="primary">Save token</button>
+            <span class="muted" style="font-size: 0.85em">
+              Token is validated with <code>GET /user</code> before saving.
+            </span>
+          </div>
+        </form>
+      </div>
     {% endif %}
   </main>
 </body>

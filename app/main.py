@@ -122,28 +122,40 @@ async def claude_logout_route(_user: str = Depends(require_auth)):
     return RedirectResponse(url="/claude", status_code=303)
 
 
-# ── GitHub login flow ──────────────────────────────────────────────────────
+# ── GitHub login flow (PAT-based) ──────────────────────────────────────────
 
 
 @app.get("/gh", response_class=HTMLResponse)
-def gh_page(request: Request, _user: str = Depends(require_auth)):
+def gh_page(
+    request: Request,
+    _user: str = Depends(require_auth),
+    last_error: Optional[str] = None,
+):
     return templates.TemplateResponse(
         request=request,
         name="gh.html",
         context={
             "logged_in": gh_login.logged_in(),
-            "state": gh_login.current_state(),
+            "user": gh_login.current_user(),
+            "last_error": last_error,
         },
     )
 
 
-@app.post("/gh/login/start")
-async def gh_login_start(_user: str = Depends(require_auth)):
-    await gh_login.start_login()
-    return RedirectResponse(url="/gh", status_code=303)
+@app.post("/gh/token")
+async def gh_set_token(
+    _user: str = Depends(require_auth),
+    token: str = Form(...),
+):
+    ok, msg = await gh_login.set_token(token)
+    if ok:
+        return RedirectResponse(url="/gh", status_code=303)
+    from urllib.parse import urlencode
+    qs = urlencode({"last_error": msg})
+    return RedirectResponse(url=f"/gh?{qs}", status_code=303)
 
 
 @app.post("/gh/logout")
 async def gh_logout_route(_user: str = Depends(require_auth)):
-    await gh_login.logout()
+    gh_login.logout()
     return RedirectResponse(url="/gh", status_code=303)
