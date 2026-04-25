@@ -292,8 +292,13 @@ async def submit_code(code: str) -> LoginState:
     _state.status = "submitting"
     pre_submit_buf_size = len(_state.stdout_buf)
     try:
-        os.write(_state.master_fd, (code + "\n").encode())
-        _log("submit: code written")
+        # claude reads the code prompt in raw/non-canonical mode (it echoes
+        # each char as `*`). In that mode the kernel does NOT translate \n
+        # to "Enter" — only \r does. Confirmed by logs: sending \n left
+        # claude blocked indefinitely while \r as the auto-Enter during
+        # start_login successfully advances the prompt.
+        os.write(_state.master_fd, (code + "\r").encode())
+        _log("submit: code written (with \\r terminator)")
     except OSError as exc:
         _state.status = "failed"
         _state.error = f"failed to write code: {exc}"
