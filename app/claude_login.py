@@ -296,13 +296,20 @@ async def submit_code(code: str) -> LoginState:
     _state.status = "submitting"
     pre_submit_buf_size = len(_state.stdout_buf)
     try:
-        # claude reads the code prompt in raw/non-canonical mode (it echoes
-        # each char as `*`). In that mode the kernel does NOT translate \n
-        # to "Enter" — only \r does. Confirmed by logs: sending \n left
-        # claude blocked indefinitely while \r as the auto-Enter during
-        # start_login successfully advances the prompt.
-        os.write(_state.master_fd, (code + "\r").encode())
-        _log("submit: code written (with \\r terminator)")
+        # claude reads the code prompt in raw/non-canonical mode and
+        # something in its input handler stops processing when fed >~80
+        # chars in one write — verified by direct test (38-char bogus
+        # rejected within 100ms, 86-char bogus times out at 30s with
+        # only the echoed `*`s and no further claude output).
+        #
+        # Workaround: write the code char-by-char with a short delay,
+        # mimicking how a human types into a terminal. Then a separate
+        # final \r as the Enter terminator.
+        for ch in code.encode():
+            os.write(_state.master_fd, bytes([ch]))
+            await asyncio.sleep(0.005)  # ~5ms per char => 92 chars ≈ 460ms
+        os.write(_state.master_fd, b"\r")
+        _log(f"submit: code written char-by-char ({len(code)} bytes + \\r)")
     except OSError as exc:
         _state.status = "failed"
         _state.error = f"failed to write code: {exc}"
