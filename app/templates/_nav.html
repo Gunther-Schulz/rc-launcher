@@ -1,0 +1,57 @@
+<nav class="rcl-nav">
+  <a href="/" class="brand">rc-launcher</a>
+  <span class="spacer"></span>
+  <a href="/" class="nav-item {% if nav_active == 'home' %}active{% endif %}">Home</a>
+  <a href="/claude" class="nav-item {% if nav_active == 'claude' %}active{% endif %}">
+    Claude
+    {% if nav_claude_logged_in %}<span class="dot ok" title="logged in"></span>
+    {% else %}<span class="dot" title="not logged in"></span>{% endif %}
+  </a>
+  <a href="/gh" class="nav-item {% if nav_active == 'gh' %}active{% endif %}">
+    GitHub
+    {% if nav_gh_logged_in %}<span class="dot ok" title="logged in"></span>
+    {% else %}<span class="dot" title="not logged in"></span>{% endif %}
+  </a>
+</nav>
+<style>
+  .rcl-nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    padding: 0.6em 1em;
+    background: #15171a;
+    border-bottom: 1px solid #2a2d33;
+    backdrop-filter: blur(6px);
+    padding-top: max(0.6em, env(safe-area-inset-top));
+  }
+  .rcl-nav .brand {
+    font-weight: 600;
+    color: #e8e9ea;
+    text-decoration: none;
+    margin-right: 0.6em;
+  }
+  .rcl-nav .spacer { flex: 1; }
+  .rcl-nav .nav-item {
+    color: #898d94;
+    text-decoration: none;
+    padding: 0.4em 0.7em;
+    border-radius: 6px;
+    font-size: 0.95em;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    min-height: 2.4em;
+  }
+  .rcl-nav .nav-item:hover { background: #1f2126; color: #e8e9ea; }
+  .rcl-nav .nav-item.active { background: #0b2a3a; color: #7dd3fc; }
+  .rcl-nav .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #4a4d52;
+  }
+  .rcl-nav .dot.ok { background: #86efac; }
+</style>

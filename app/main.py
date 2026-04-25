@@ -52,6 +52,15 @@ _HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=_HERE / "templates")
 
 
+def _nav_ctx(active: str) -> dict:
+    """Context for the persistent top nav, included on every page."""
+    return {
+        "nav_active": active,
+        "nav_claude_logged_in": claude_login.logged_in(),
+        "nav_gh_logged_in": gh_login.logged_in(),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, _user: str = Depends(require_auth)):
     return templates.TemplateResponse(
@@ -61,6 +70,7 @@ def index(request: Request, _user: str = Depends(require_auth)):
             "phase": 3,
             "claude_logged_in": claude_login.logged_in(),
             "gh_logged_in": gh_login.logged_in(),
+            **_nav_ctx("home"),
         },
     )
 
@@ -88,6 +98,7 @@ def claude_page(
             "state": claude_login.current_state(),
             "verify_ok": verify_ok,
             "verify_msg": verify_msg,
+            **_nav_ctx("claude"),
         },
     )
 
@@ -138,6 +149,7 @@ def gh_page(
             "logged_in": gh_login.logged_in(),
             "user": gh_login.current_user(),
             "last_error": last_error,
+            **_nav_ctx("gh"),
         },
     )
 
