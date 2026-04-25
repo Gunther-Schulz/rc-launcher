@@ -13,11 +13,15 @@ with HTML:
   - status page renders the URL as a tap-able link (mobile friendly) +
     a text input for the callback code.
   - "Submit code" form -> backend writes the code to the pty's stdin,
-    waits for the process to exit, checks that the credentials file
-    was written, reports success.
+    waits for the credentials file to land (or process to exit).
 
 Single-user deploy: module-level singleton state. If the FastAPI process
 restarts mid-flow, state is dropped; user just restarts the login.
+
+Logging: every interesting step prints to stdout with a `[claude_login]`
+prefix and a millisecond timestamp. Uvicorn captures stdout, so Coolify's
+app log shows the full picture. We deliberately do NOT log the OAuth
+code, credentials, or full URL contents — only metadata (lengths, etc).
 """
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import termios
 import time
 from dataclasses import dataclass, field
@@ -43,43 +48,47 @@ CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_JSON = Path.home() / ".claude.json"
 CLAUDE_BACKUPS_DIR = Path.home() / ".claude" / "backups"
 
-# Resolve `claude` once at import time so per-request spawns don't depend
-# on whatever PATH subprocess inherits. Fallback to the devcontainer
-# default install location.
 CLAUDE_BIN = shutil.which("claude") or "/usr/local/share/npm-global/bin/claude"
-# claude emits an authorize URL either on claude.com or claude.ai; both
-# have been seen in the wild depending on account migration status.
+
 OAUTH_URL_RE = re.compile(
     r"https://(?:claude\.com|claude\.ai|console\.anthropic\.com)"
     r"/[a-zA-Z0-9_\-./?=&%+:#]+oauth/authorize[a-zA-Z0-9_\-./?=&%+:#]*"
 )
-# strip CSI (\x1b[ ... letter) and OSC (\x1b] ... \x07) sequences that
-# claude uses for colors, cursor movement, title changes. Everything else
-# is left as-is; our URL regex does its own filtering.
 _CSI_RE = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]")
 _OSC_RE = re.compile(rb"\x1b\][^\x07]*\x07")
 
-# read timeouts (seconds) — generous so slow hosts aren't a problem
 URL_WAIT_TIMEOUT = 60
-CODE_WAIT_TIMEOUT = 90
+# Code submission is normally near-instant once claude reads the code
+# from stdin and validates it against Anthropic. We give 30s as a
+# generous-but-still-fast cap.
+CODE_WAIT_TIMEOUT = 30
 
-# pty geometry — wide so claude doesn't hard-wrap the OAuth URL mid-char.
-# URLs are ~450 chars with state+challenge+scopes, so 1000 gives margin.
 PTY_COLS = 1000
 PTY_ROWS = 50
 
 
+def _log(msg: str) -> None:
+    ts = time.strftime("%H:%M:%S") + f".{int((time.time() % 1) * 1000):03d}"
+    print(f"[claude_login {ts}] {msg}", flush=True, file=sys.stdout)
+
+
+def _safe_preview(b: bytes, n: int = 240) -> str:
+    """Strip ANSI + replace non-printable, return a short repr suitable for logs."""
+    s = _strip_ansi(b).decode("utf-8", errors="replace")
+    s = "".join(ch if (ch.isprintable() or ch in "\n\r\t ") else "·" for ch in s)
+    s = s.replace("\n", "⏎").replace("\r", "")
+    if len(s) > n:
+        return s[:n] + f" …({len(s) - n} more chars)"
+    return s
+
+
 @dataclass
 class LoginState:
-    """Current state of a login flow.  `process` and `master_fd` are
-    populated only while the pty is alive; once we finish we close them."""
-
     status: str = "idle"  # idle | awaiting_code | submitting | success | failed
     url: Optional[str] = None
     error: Optional[str] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
-    # runtime-only
     process: Optional[subprocess.Popen] = field(default=None, repr=False)
     master_fd: Optional[int] = field(default=None, repr=False)
     stdout_buf: bytes = field(default=b"", repr=False)
@@ -101,18 +110,19 @@ def _strip_ansi(data: bytes) -> bytes:
 
 
 def _cleanup() -> None:
-    """Kill any lingering claude-login process and close the pty."""
     global _state
     if _state.process is not None:
         try:
             os.killpg(os.getpgid(_state.process.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
+            _log(f"cleanup: SIGTERMed pgid for pid={_state.process.pid}")
+        except (ProcessLookupError, PermissionError) as e:
+            _log(f"cleanup: SIGTERM skipped ({type(e).__name__})")
         try:
             _state.process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(os.getpgid(_state.process.pid), signal.SIGKILL)
+                _log(f"cleanup: SIGKILLed pid={_state.process.pid}")
             except (ProcessLookupError, PermissionError):
                 pass
     if _state.master_fd is not None:
@@ -127,89 +137,87 @@ def _cleanup() -> None:
 async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
     """Read pty stdout until we match an OAuth URL or deadline expires.
 
-    Claude Code's first-run flow (v2.1.119) prompts for theme selection
-    before showing the OAuth URL. We accept defaults by pressing Enter
-    periodically while waiting for the URL to appear — harmless once
-    login output starts (extra Enter just becomes an empty stdin line).
+    Auto-Enter every 2s so claude's first-run prompts (theme, etc) accept
+    defaults without user action.
     """
     os.set_blocking(master_fd, False)
     last_enter = 0.0
+    last_log_size = 0
     ENTER_EVERY = 2.0
+    iters_with_data = 0
     while time.time() < deadline:
         try:
             chunk = os.read(master_fd, 4096)
         except BlockingIOError:
             chunk = None
-        except OSError:
+        except OSError as e:
+            _log(f"start: read OSError ({e}); aborting")
             return None
         if chunk == b"":
-            # pty closed — process exited
+            _log("start: pty closed (EOF) — process exited before URL")
             return None
         if chunk:
             _state.stdout_buf += chunk
+            iters_with_data += 1
+            # Log new-bytes preview when buffer grows by >= 50 bytes
+            if len(_state.stdout_buf) - last_log_size >= 50:
+                new_bytes = _state.stdout_buf[last_log_size:]
+                _log(f"start: +{len(new_bytes)}B (total {len(_state.stdout_buf)}B): {_safe_preview(new_bytes)}")
+                last_log_size = len(_state.stdout_buf)
             text = _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
             unwrapped = re.sub(r"(?<=[^\s])\r?\n(?=[^\s/])", "", text)
             match = OAUTH_URL_RE.search(unwrapped)
             if match:
-                return match.group(0)
-        # Periodically press Enter to accept any default on a setup prompt.
+                url = match.group(0)
+                _log(f"start: URL extracted, len={len(url)}, host={url.split('/')[2]}")
+                return url
         now = time.time()
         if now - last_enter > ENTER_EVERY:
             try:
                 os.write(master_fd, b"\r")
-            except OSError:
-                pass
+                _log("start: auto-Enter sent")
+            except OSError as e:
+                _log(f"start: auto-Enter failed ({e})")
             last_enter = now
         await asyncio.sleep(0.1)
+    _log(f"start: deadline reached after {URL_WAIT_TIMEOUT}s, no URL found, total {len(_state.stdout_buf)}B captured")
     return None
 
 
-def _wait_for_exit(process: subprocess.Popen, timeout: float) -> bool:
-    try:
-        process.wait(timeout=timeout)
-        return True
-    except subprocess.TimeoutExpired:
-        return False
-
-
 async def start_login() -> LoginState:
-    """Spawn `claude login` in a pty, wait for the OAuth URL to appear.
-
-    Idempotent when called during an active awaiting_code flow: returns
-    the existing state without spawning a second process. Logged-in
-    callers should check `logged_in()` first and not call this.
-    """
     global _state
 
     if _state.status == "awaiting_code":
+        _log("start: already in awaiting_code, returning existing state")
         return _state
 
-    # Clear any terminal state from a prior attempt.
     _cleanup()
-    # Purge residual claude state so login starts clean. Otherwise claude
-    # hangs on a "config not found — restore from backup?" interactive
-    # prompt from leftovers on persistent volumes.
+    # Purge residual claude state so login starts clean.
+    purged = []
     try:
         CLAUDE_JSON.unlink()
+        purged.append(str(CLAUDE_JSON))
     except FileNotFoundError:
         pass
     if CLAUDE_BACKUPS_DIR.exists():
         shutil.rmtree(CLAUDE_BACKUPS_DIR, ignore_errors=True)
+        purged.append(str(CLAUDE_BACKUPS_DIR))
+    if purged:
+        _log(f"start: purged residual state: {purged}")
 
     _state = LoginState(status="awaiting_code", started_at=time.time())
 
     master, slave = pty.openpty()
-    # Widen the pty before claude starts; it reads dimensions at spawn
-    # via TIOCGWINSZ and sizes its output accordingly.
     fcntl.ioctl(
         master,
         termios.TIOCSWINSZ,
         struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0),
     )
     env = dict(os.environ)
-    env["TERM"] = "dumb"  # suppress most ANSI; our stripper is defense-in-depth
+    env["TERM"] = "dumb"
     env["COLUMNS"] = str(PTY_COLS)
     env["LINES"] = str(PTY_ROWS)
+    _log(f"start: spawning {CLAUDE_BIN} login (pty {PTY_COLS}x{PTY_ROWS})")
     try:
         process = subprocess.Popen(
             [CLAUDE_BIN, "login"],
@@ -217,7 +225,7 @@ async def start_login() -> LoginState:
             stdout=slave,
             stderr=slave,
             env=env,
-            start_new_session=True,  # own process group so we can SIGTERM the tree
+            start_new_session=True,
             close_fds=True,
         )
     except (FileNotFoundError, OSError) as exc:
@@ -226,8 +234,10 @@ async def start_login() -> LoginState:
         _state.status = "failed"
         _state.error = f"failed to spawn claude: {exc}"
         _state.finished_at = time.time()
+        _log(f"start: spawn failed: {exc}")
         return _state
     os.close(slave)
+    _log(f"start: spawned pid={process.pid}")
 
     _state.process = process
     _state.master_fd = master
@@ -235,10 +245,7 @@ async def start_login() -> LoginState:
     deadline = time.time() + URL_WAIT_TIMEOUT
     url = await _read_until_url(master, deadline)
     if url is None:
-        # Capture a tail of whatever claude did emit for debugging.
-        tail = (
-            _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
-        )[-1500:]
+        tail = (_strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace"))[-1500:]
         exit_code = _state.process.poll() if _state.process else None
         _state.status = "failed"
         _state.error = (
@@ -246,90 +253,101 @@ async def start_login() -> LoginState:
             f"(claude exit code={exit_code!r}). Captured output:\n{tail}"
         )
         _state.finished_at = time.time()
+        _log(f"start: failed (exit={exit_code!r}), elapsed={time.time() - _state.started_at:.1f}s")
         _cleanup()
         return _state
 
     _state.url = url
+    _log(f"start: success, elapsed={time.time() - _state.started_at:.1f}s")
     return _state
 
 
 async def submit_code(code: str) -> LoginState:
-    """Pipe the OAuth callback code to claude's stdin, wait for exit."""
+    """Pipe the OAuth callback code to claude's stdin, wait for completion.
+
+    Done as soon as either (a) credentials file appears or (b) process
+    exits or (c) timeout. NO auto-Enter, NO failure-pattern matching:
+    just observe and report.
+    """
     global _state
+    submit_started = time.time()
 
     if _state.status != "awaiting_code":
+        _log(f"submit: rejected — status={_state.status!r}")
         _state.error = f"not awaiting code (state={_state.status!r})"
         return _state
     if _state.process is None or _state.master_fd is None:
+        _log("submit: rejected — pty/process state missing")
         _state.status = "failed"
         _state.error = "internal: pty state missing"
         return _state
 
     code = code.strip()
     if not code:
+        _log("submit: rejected — empty code")
         _state.error = "code is empty"
         return _state
 
+    _log(f"submit: writing code (len={len(code)}) to pid={_state.process.pid} stdin")
     _state.status = "submitting"
+    pre_submit_buf_size = len(_state.stdout_buf)
     try:
         os.write(_state.master_fd, (code + "\n").encode())
+        _log("submit: code written")
     except OSError as exc:
         _state.status = "failed"
         _state.error = f"failed to write code: {exc}"
+        _log(f"submit: write failed: {exc}")
         _cleanup()
         return _state
 
-    # Drain stdout (non-blocking) while waiting for claude to either exit
-    # or write the credentials file. Keep auto-Entering so any post-login
-    # setup prompt (model picker, etc.) accepts its default.
     os.set_blocking(_state.master_fd, False)
     deadline = time.time() + CODE_WAIT_TIMEOUT
-    last_enter = time.time()  # don't immediately Enter; give claude time to read the code
-    ENTER_EVERY = 2.0
+    last_log_size = pre_submit_buf_size
     while time.time() < deadline:
-        # Success can land before the process exits (claude may stay
-        # interactive after writing creds); detect either way.
         if logged_in():
+            _log("submit: credentials file appeared")
             break
-        if _state.process.poll() is not None:
+        exit_code = _state.process.poll()
+        if exit_code is not None:
+            _log(f"submit: process exited (code={exit_code})")
             break
         try:
             chunk = os.read(_state.master_fd, 4096)
         except BlockingIOError:
             chunk = None
-        except OSError:
+        except OSError as e:
+            _log(f"submit: read OSError ({e}); aborting wait")
             break
         if chunk:
             _state.stdout_buf += chunk
-        now = time.time()
-        if now - last_enter > ENTER_EVERY:
-            try:
-                os.write(_state.master_fd, b"\r")
-            except OSError:
-                pass
-            last_enter = now
+            if len(_state.stdout_buf) - last_log_size >= 50:
+                new_bytes = _state.stdout_buf[last_log_size:]
+                _log(f"submit: +{len(new_bytes)}B (total {len(_state.stdout_buf)}B): {_safe_preview(new_bytes)}")
+                last_log_size = len(_state.stdout_buf)
         await asyncio.sleep(0.1)
 
-    # Final state check.
+    elapsed = time.time() - submit_started
     if logged_in():
         _state.status = "success"
         _state.error = None
+        _log(f"submit: SUCCESS in {elapsed:.1f}s")
     else:
-        tail = (
-            _strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace")
-        )[-1500:]
+        tail = (_strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace"))[-1500:]
         exit_code = _state.process.poll() if _state.process else None
         _state.status = "failed"
-        if exit_code is None:
+        if exit_code is not None:
             _state.error = (
-                f"claude did not finish within {CODE_WAIT_TIMEOUT}s "
-                f"and credentials file was not written. Captured output:\n{tail}"
+                f"claude exited (code={exit_code}) without writing credentials.\n\n"
+                f"Captured output:\n{tail}"
             )
+            _log(f"submit: FAILED — exited code={exit_code} after {elapsed:.1f}s")
         else:
             _state.error = (
-                f"claude exited (code={exit_code}) without writing credentials. "
-                f"Likely an invalid or expired code. Captured output:\n{tail}"
+                f"claude did not finish within {CODE_WAIT_TIMEOUT}s and "
+                f"credentials weren't written.\n\nCaptured output:\n{tail}"
             )
+            _log(f"submit: FAILED — timeout after {elapsed:.1f}s, process still alive (pid={_state.process.pid if _state.process else None})")
     _state.finished_at = time.time()
     _cleanup()
     return _state
@@ -338,7 +356,11 @@ async def submit_code(code: str) -> LoginState:
 async def logout() -> None:
     """Remove claude's credentials file. Any running login is killed."""
     global _state
+    _log("logout: cleaning up state and removing credentials")
     _cleanup()
     _state = LoginState(status="idle")
     if CREDENTIALS_FILE.exists():
         CREDENTIALS_FILE.unlink()
+        _log("logout: credentials removed")
+    else:
+        _log("logout: no credentials file to remove")
