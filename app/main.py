@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
-from . import claude_login
+from . import claude_login, gh_login
 
 _USERNAME = os.environ.get("RCL_USERNAME", "admin")
 _PASSWORD = os.environ.get("RCL_PASSWORD") or ""
@@ -58,15 +58,16 @@ def index(request: Request, _user: str = Depends(require_auth)):
         request=request,
         name="index.html",
         context={
-            "phase": 2,
+            "phase": 3,
             "claude_logged_in": claude_login.logged_in(),
+            "gh_logged_in": gh_login.logged_in(),
         },
     )
 
 
 @app.get("/api/health")
 def health(_user: str = Depends(require_auth)) -> JSONResponse:
-    return JSONResponse({"ok": True, "phase": 2})
+    return JSONResponse({"ok": True, "phase": 3})
 
 
 # ── Claude login flow ──────────────────────────────────────────────────────
@@ -119,3 +120,30 @@ async def claude_login_code(
 async def claude_logout_route(_user: str = Depends(require_auth)):
     await claude_login.logout()
     return RedirectResponse(url="/claude", status_code=303)
+
+
+# ── GitHub login flow ──────────────────────────────────────────────────────
+
+
+@app.get("/gh", response_class=HTMLResponse)
+def gh_page(request: Request, _user: str = Depends(require_auth)):
+    return templates.TemplateResponse(
+        request=request,
+        name="gh.html",
+        context={
+            "logged_in": gh_login.logged_in(),
+            "state": gh_login.current_state(),
+        },
+    )
+
+
+@app.post("/gh/login/start")
+async def gh_login_start(_user: str = Depends(require_auth)):
+    await gh_login.start_login()
+    return RedirectResponse(url="/gh", status_code=303)
+
+
+@app.post("/gh/logout")
+async def gh_logout_route(_user: str = Depends(require_auth)):
+    await gh_login.logout()
+    return RedirectResponse(url="/gh", status_code=303)

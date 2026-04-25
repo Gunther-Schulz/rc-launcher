@@ -76,13 +76,22 @@
         {% endif %}
       </div>
     </div>
+    <div class="card">
+      <a href="/gh">GitHub login →</a>
+      <div class="status {% if gh_logged_in %}ok{% endif %}" style="margin-top: 0.4em">
+        {% if gh_logged_in %}
+          ✓ Logged in; token persisted.
+        {% else %}
+          Not logged in yet.
+        {% endif %}
+      </div>
+    </div>
 
     <h2>Coming in later phases</h2>
     <div class="card muted">
       <ul style="padding-left: 1.2em; margin: 0">
-        <li>Phase 3: <code>gh auth login</code> device-code wrap.</li>
         <li>Phase 4: repo list, start session.</li>
-        <li>Phase 5: session management + RC URLs.</li>
+        <li>Phase 5: session management + RC URLs (the actual mobile-tap link).</li>
       </ul>
     </div>
   </main>
