@@ -310,9 +310,17 @@ async def submit_code(code: str) -> LoginState:
         _cleanup()
         return _state
 
+    # Patterns claude prints when it rejects a code. Verified by direct
+    # test (curl POST with a bogus code): claude responded within 100ms
+    # with "OAuth error: Invalid code. Please make sure the full code
+    # was copied" and stayed alive re-prompting. Without this detection
+    # we'd wait the full timeout for nothing.
+    REJECTION_PATTERNS = ("oauth error", "invalid code")
+
     os.set_blocking(_state.master_fd, False)
     deadline = time.time() + CODE_WAIT_TIMEOUT
     last_log_size = pre_submit_buf_size
+    rejected_pattern: Optional[str] = None
     while time.time() < deadline:
         if logged_in():
             _log("submit: credentials file appeared")
@@ -334,6 +342,20 @@ async def submit_code(code: str) -> LoginState:
                 new_bytes = _state.stdout_buf[last_log_size:]
                 _log(f"submit: +{len(new_bytes)}B (total {len(_state.stdout_buf)}B): {_safe_preview(new_bytes)}")
                 last_log_size = len(_state.stdout_buf)
+            # Check rejection patterns ONLY in bytes received after we
+            # wrote the code, to avoid matching pre-existing text.
+            new_text_lower = (
+                _strip_ansi(_state.stdout_buf[pre_submit_buf_size:])
+                .decode("utf-8", errors="replace")
+                .lower()
+            )
+            for pat in REJECTION_PATTERNS:
+                if pat in new_text_lower:
+                    rejected_pattern = pat
+                    break
+            if rejected_pattern:
+                _log(f"submit: detected rejection pattern {rejected_pattern!r}, failing fast")
+                break
         await asyncio.sleep(0.1)
 
     elapsed = time.time() - submit_started
@@ -345,7 +367,14 @@ async def submit_code(code: str) -> LoginState:
         tail = (_strip_ansi(_state.stdout_buf).decode("utf-8", errors="replace"))[-1500:]
         exit_code = _state.process.poll() if _state.process else None
         _state.status = "failed"
-        if exit_code is not None:
+        if rejected_pattern is not None:
+            _state.error = (
+                f"Claude rejected the code (matched: {rejected_pattern!r}). "
+                f"Likely an expired or mistyped code — restart for a fresh URL "
+                f"and try again.\n\nCaptured output:\n{tail}"
+            )
+            _log(f"submit: FAILED — rejected ({rejected_pattern!r}) in {elapsed:.1f}s")
+        elif exit_code is not None:
             _state.error = (
                 f"claude exited (code={exit_code}) without writing credentials.\n\n"
                 f"Captured output:\n{tail}"
