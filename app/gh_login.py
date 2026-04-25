@@ -199,9 +199,16 @@ def logged_in() -> bool:
 
 
 async def _read_until_code_and_url(master_fd: int, deadline: float) -> tuple[Optional[str], Optional[str]]:
-    """Read stdout until we have BOTH the device code and the URL, or timeout."""
+    """Read stdout until we have BOTH the device code and the URL, or timeout.
+
+    gh asks 'Authenticate Git with your GitHub credentials? (Y/n)' before
+    printing the device code; auto-Enter every 2s accepts that default
+    (and any other Y/n we haven't preempted with flags).
+    """
     os.set_blocking(master_fd, False)
+    last_enter = 0.0
     last_log_size = 0
+    ENTER_EVERY = 2.0
     code: Optional[str] = None
     url: Optional[str] = None
     while time.time() < deadline:
@@ -234,6 +241,14 @@ async def _read_until_code_and_url(master_fd: int, deadline: float) -> tuple[Opt
                     _log(f"start: URL extracted: {url}")
             if code and url:
                 return code, url
+        now = time.time()
+        if now - last_enter > ENTER_EVERY:
+            try:
+                os.write(master_fd, b"\r")
+                _log("start: auto-Enter sent")
+            except OSError as e:
+                _log(f"start: auto-Enter failed ({e})")
+            last_enter = now
         await asyncio.sleep(0.1)
     _log(f"start: deadline reached after {URL_WAIT_TIMEOUT}s, code={code!r}, url={url!r}")
     return code, url
