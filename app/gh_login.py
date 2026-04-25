@@ -276,7 +276,9 @@ async def start_login() -> GhState:
         struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0),
     )
     env = dict(os.environ)
-    env["TERM"] = "dumb"
+    # TERM=dumb left gh's prompt unable to consume our \r — gh's TUI
+    # library (Bubble Tea / survey) uses real terminal escape codes.
+    env["TERM"] = "xterm-256color"
     env["COLUMNS"] = str(PTY_COLS)
     env["LINES"] = str(PTY_ROWS)
     # Pre-answer the host + protocol prompts so gh goes straight to web flow.
