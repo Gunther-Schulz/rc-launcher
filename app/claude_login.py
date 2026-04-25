@@ -296,20 +296,20 @@ async def submit_code(code: str) -> LoginState:
     _state.status = "submitting"
     pre_submit_buf_size = len(_state.stdout_buf)
     try:
-        # claude reads the code prompt in raw/non-canonical mode and
-        # something in its input handler stops processing when fed >~80
-        # chars in one write — verified by direct test (38-char bogus
-        # rejected within 100ms, 86-char bogus times out at 30s with
-        # only the echoed `*`s and no further claude output).
-        #
-        # Workaround: write the code char-by-char with a short delay,
-        # mimicking how a human types into a terminal. Then a separate
-        # final \r as the Enter terminator.
-        for ch in code.encode():
-            os.write(_state.master_fd, bytes([ch]))
-            await asyncio.sleep(0.005)  # ~5ms per char => 92 chars ≈ 460ms
-        os.write(_state.master_fd, b"\r")
-        _log(f"submit: code written char-by-char ({len(code)} bytes + \\r)")
+        # claude.com almost certainly enables bracketed-paste mode in its
+        # input prompt (most modern TUIs do). Real terminals wrap pasted
+        # text in `\e[200~ ... \e[201~` so the app knows it's a paste vs
+        # individual keystrokes. Without those markers a bulk write of
+        # >80 chars gets misinterpreted (verified: 38-char bogus rejected
+        # in 100ms, 86-char bogus times out at 30s with only the echoed
+        # `*`s).
+        BRACKETED_PASTE_START = b"\x1b[200~"
+        BRACKETED_PASTE_END = b"\x1b[201~"
+        os.write(
+            _state.master_fd,
+            BRACKETED_PASTE_START + code.encode() + BRACKETED_PASTE_END + b"\r",
+        )
+        _log(f"submit: code written as bracketed paste ({len(code)} bytes + paste markers + \\r)")
     except OSError as exc:
         _state.status = "failed"
         _state.error = f"failed to write code: {exc}"
