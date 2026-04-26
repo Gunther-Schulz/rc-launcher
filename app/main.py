@@ -324,8 +324,12 @@ async def sessions_start(
         qs = urlencode({"prep_branch": branch, "prep_ok": "0", "prep_msg": str(e)})
         return RedirectResponse(url=f"/repos/{owner}/{repo}?{qs}", status_code=303)
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        # Log full traceback so we don't lose the cause to an empty str(e).
+        print(f"[main] /sessions/start raised {type(e).__name__}: {e!r}\n{tb}", flush=True)
         qs = urlencode({"prep_branch": branch, "prep_ok": "0",
-                        "prep_msg": f"Unexpected: {e}"})
+                        "prep_msg": f"Unexpected ({type(e).__name__}): {e!r}"})
         return RedirectResponse(url=f"/repos/{owner}/{repo}?{qs}", status_code=303)
     return RedirectResponse(url=f"/sessions/{sess.id}", status_code=303)
 
