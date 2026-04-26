@@ -148,6 +148,16 @@ if [ ! -f /home/node/.claude.json ]; then
     chown node:node /home/node/.claude.json
   fi
 fi
+
+# Refresh org-info cache. claude RC needs oauthAccount.organizationUuid
+# in ~/.claude.json. The OAuth tokens from the legacy `claude login` flow
+# don't always populate this. `claude auth status` may fetch+cache it on
+# first call when valid OAuth tokens exist; if so, this seeds the cache
+# without requiring a full re-login. Output is logged for diagnosis.
+if [ -f /home/node/.claude.json ]; then
+  echo "--- claude auth status (refresh org-info cache) ---"
+  sudo -u node -E HOME=/home/node claude auth status 2>&1 || echo "(status check failed — non-fatal)"
+fi
 echo "=== end boot ==="
 
 exec sudo -u node -E HOME=/home/node \

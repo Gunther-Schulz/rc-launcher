@@ -275,16 +275,16 @@ async def start_login() -> LoginState:
     env["TERM"] = "dumb"
     env["COLUMNS"] = str(PTY_COLS)
     env["LINES"] = str(PTY_ROWS)
-    _log(f"start: spawning {CLAUDE_BIN} auth login (pty {PTY_COLS}x{PTY_ROWS})")
+    _log(f"start: spawning {CLAUDE_BIN} login (pty {PTY_COLS}x{PTY_ROWS})")
     try:
         process = subprocess.Popen(
-            # `claude auth login` is the documented current command (claude
-            # 2.1.119). The bare `claude login` alias completes OAuth but
-            # doesn't populate oauthAccount.organizationUuid in .claude.json,
-            # which `claude remote-control` needs to determine eligibility —
-            # surfaced as "Unable to determine your organization for Remote
-            # Control eligibility" the first time we tried to spawn RC.
-            [CLAUDE_BIN, "auth", "login"],
+            # `claude login` (legacy) uses a paste-the-code flow that fits
+            # our pty wrapper. `claude auth login` (current) uses a
+            # callback-based OAuth flow that needs a local HTTP listener
+            # reachable from the user's browser — incompatible with our
+            # headless container model. Org-info gap (organizationUuid
+            # missing for Remote Control) is handled separately on boot.
+            [CLAUDE_BIN, "login"],
             stdin=slave,
             stdout=slave,
             stderr=slave,
