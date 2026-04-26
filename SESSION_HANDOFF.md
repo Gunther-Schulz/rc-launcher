@@ -133,6 +133,63 @@ This open test is the highest-priority next thing if continuing on a
 new machine. It validates the entire "bootstrap any GitHub repo with
 my standard config" workflow.
 
+### Bootstrap pattern: skills + MCP + CLAUDE.md (broader than just CLAUDE.md)
+
+The test above only covers CLAUDE.md because that's all `claude/` in
+dotfiles currently contains. The full bootstrap story Anthropic
+documents — and what was discussed this session — is broader. Per the
+CCotW docs, what gets loaded automatically in a cloud session:
+
+| File / dir | Loaded? | Source |
+|---|---|---|
+| Repo's `CLAUDE.md` | Yes | Part of the clone |
+| Repo's `.claude/settings.json` hooks | Yes | Part of the clone |
+| Repo's `.mcp.json` MCP servers | Yes | Part of the clone |
+| Repo's `.claude/skills/` | Yes | Part of the clone |
+| Repo's `.claude/agents/` | Yes | Part of the clone |
+| Repo's `.claude/commands/` | Yes | Part of the clone |
+| Repo's `.claude/rules/` | Yes | Part of the clone |
+| Plugins declared in `.claude/settings.json` | Yes | Installed at session start |
+| User-level `~/.claude/CLAUDE.md` | NOT documented as loaded | (test plan above checks this) |
+| User-level `~/.claude/skills/` etc. | NOT documented as loaded | Same as above |
+
+**Implication for the bootstrap:** if the cloud VM only loads
+*repo-level* `.claude/`, then the cleanest bootstrap pattern is for
+the setup script to copy from the dotfiles repo into the working
+repo's `.claude/` (Approach C variant — extended to skills + MCP +
+hooks, not just CLAUDE.md). With a global gitignore covering
+`.claude/`, `.mcp.json`, and `CLAUDE.md`, none of it appears in
+`git status`.
+
+**Future direction worth considering:** grow the dotfiles `claude/`
+dir to include:
+- `claude/skills/` — your standard skills (the kind `update-config`,
+  `simplify`, `fewer-permission-prompts` provide; you could write your
+  own for recurring tasks)
+- `claude/.mcp.json` — MCP servers you always want available
+- `claude/.claude/settings.json` — hooks you always want active
+
+Then setup script extends the existing CLAUDE.md copy to include
+those files. That gets the "bootstrap any repo with my full standard
+config" workflow.
+
+### Skill-craft as a reference for skill design
+
+`Gunther-Schulz/skill-craft` is a skill plugin that codifies how to
+design effective Claude Code skills (file categories, frontmatter
+discipline, "every sentence must change behavior", reflexivity, file
+boundary rules). My dotfiles `CLAUDE.md` was vetted against
+skill-craft's principles in this session — alignment is documented in
+JOURNAL entries (especially the consolidation commit).
+
+If you ever build skills for the dotfiles `claude/skills/` dir, read
+skill-craft's PROCEDURE.md first. Key principles: operational vs
+maintenance file boundary, imperative voice, no provenance/fluff,
+each rule grounded in a real incident (Path 1).
+
+Install with: `claude plugin marketplace add Gunther-Schulz/skill-craft`
+then `claude plugin install skill-craft@skill-craft-marketplace`.
+
 ## What to do on the new machine
 
 1. **Bootstrap dotfiles first:** `git clone Gunther-Schulz/dotfiles
