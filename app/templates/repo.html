@@ -104,6 +104,16 @@
       </p>
     {% endif %}
 
+    {% if prep_msg %}
+      <div class="card{% if not prep_ok %} err{% endif %}" style="margin-top: 1em">
+        <strong>
+          {% if prep_ok %}Workspace prepared{% else %}Workspace prep failed{% endif %}
+          {% if prep_branch %} for <code>{{ prep_branch }}</code>{% endif %}.
+        </strong>
+        <p style="margin: 0.4em 0 0; word-break: break-all">{{ prep_msg }}</p>
+      </div>
+    {% endif %}
+
     {% if error %}
       <div class="card err">
         <strong>Could not load branches.</strong>
@@ -120,22 +130,22 @@
           {% if repo and b.name == repo.default_branch %}<span class="badge default">default</span>{% endif %}
           {% if b.protected %}<span class="badge">protected</span>{% endif %}
           <span class="badge"><code>{{ b.commit_sha }}</code></span>
-          <form method="post" action="/sessions/start" style="margin: 0">
+          <form method="post" action="/sessions/prep" style="margin: 0">
             <input type="hidden" name="owner" value="{{ owner }}">
             <input type="hidden" name="repo" value="{{ name }}">
             <input type="hidden" name="branch" value="{{ b.name }}">
-            <button type="submit"
-                    data-loading-text="Starting…"
-                    disabled
-                    title="Phase 5 will wire this up — clones the repo and spawns claude --remote-control">
-              Start (Phase 5)
+            <button type="submit" data-loading-text="Preparing…"
+                    title="Slice 1: clone + worktree only (no claude spawn yet)">
+              Prepare
             </button>
           </form>
         </li>
         {% endfor %}
       </ul>
       <p class="muted" style="font-size: 0.85em; margin-top: 1em">
-        The Start button is disabled until Phase 5 ships the session-launcher.
+        Slice 1 of Phase 5 — Prepare clones the repo and creates a worktree at
+        <code>/workspace/{owner}/{repo}/_wt/&lt;branch&gt;/</code>. The full
+        session start (claude RC spawn) lands in the next slice.
       </p>
     {% endif %}
   </main>

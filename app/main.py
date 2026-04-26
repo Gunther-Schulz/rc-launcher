@@ -37,7 +37,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
-from . import claude_login, gh_login, github_api
+from . import claude_login, gh_login, github_api, sessions
 
 _USERNAME = os.environ.get("RCL_USERNAME", "admin")
 _PASSWORD = os.environ.get("RCL_PASSWORD") or ""
@@ -268,6 +268,9 @@ async def repo_page(
     owner: str,
     repo: str,
     _user: str = Depends(require_auth),
+    prep_branch: Optional[str] = None,
+    prep_ok: Optional[bool] = None,
+    prep_msg: Optional[str] = None,
 ):
     token = gh_login.get_token()
     if not token:
@@ -291,6 +294,36 @@ async def repo_page(
             "repo": repo_meta,
             "branches": branches,
             "error": error,
+            "prep_branch": prep_branch,
+            "prep_ok": prep_ok,
+            "prep_msg": prep_msg,
             **_nav_ctx("repos"),
         },
     )
+
+
+# ── Session pipeline (Phase 5) ────────────────────────────────────────────
+
+
+@app.post("/sessions/prep")
+async def sessions_prep(
+    _user: str = Depends(require_auth),
+    owner: str = Form(...),
+    repo: str = Form(...),
+    branch: str = Form(...),
+):
+    """Slice 1: clone + worktree only. Confirms the FS pipeline works end
+    to end before tmux/claude is wired up in Slice 2."""
+    token = gh_login.get_token()
+    if not token:
+        return RedirectResponse(url="/gh", status_code=303)
+    qs_base = {"prep_branch": branch}
+    try:
+        result = await sessions.prep_workspace(token, owner, repo, branch)
+        msg = f"Worktree ready at {result.worktree_path} — HEAD {result.head_sha[:8]} {result.head_subject}"
+        qs = urlencode({**qs_base, "prep_ok": "1", "prep_msg": msg})
+    except sessions.PrepError as e:
+        qs = urlencode({**qs_base, "prep_ok": "0", "prep_msg": str(e)})
+    except Exception as e:
+        qs = urlencode({**qs_base, "prep_ok": "0", "prep_msg": f"Unexpected: {e}"})
+    return RedirectResponse(url=f"/repos/{owner}/{repo}?{qs}", status_code=303)
