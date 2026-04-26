@@ -156,7 +156,10 @@ fi
 # without requiring a full re-login. Output is logged for diagnosis.
 if [ -f /home/node/.claude.json ]; then
   echo "--- claude auth status (refresh org-info cache) ---"
-  sudo -u node -E HOME=/home/node claude auth status 2>&1 || echo "(status check failed — non-fatal)"
+  # Full path to claude — sudoers secure_path applies to *node* invoking
+  # sudo, not to root invoking sudo here, so PATH lookup of `claude` fails.
+  sudo -u node -E HOME=/home/node /usr/local/share/npm-global/bin/claude auth status 2>&1 \
+    || echo "(status check failed — non-fatal)"
 fi
 echo "=== end boot ==="
 
