@@ -477,16 +477,31 @@ async def start_session(
     # Now send the claude command into the running shell. With
     # --debug-file, claude writes its own diagnostic log we can surface
     # if things go wrong.
+    #
+    # Two send-keys calls: the first uses -l (literal) so that strings
+    # like '--debug-file' aren't parsed as send-keys flags, and so that
+    # 'Enter' inside the cmd would be sent as letters not RETURN. The
+    # second sends the actual Enter key to execute.
     claude_cmd = f"claude remote-control --debug-file {shlex.quote(str(debug_path))}"
     sk_rc, _, sk_err = await _run(
-        "tmux", "send-keys", "-t", tmux_name, claude_cmd, "Enter",
+        "tmux", "send-keys", "-l", "-t", tmux_name, claude_cmd,
     )
     if sk_rc != 0:
         sess.state = "error"
-        sess.error = f"send-keys rc={sk_rc}: {sk_err.strip()[:200]}"
+        sess.error = f"send-keys (text) rc={sk_rc}: {sk_err.strip()[:200]}"
         save_session(sess)
         _log(f"start_session({sid}): {sess.error}")
         return sess
+    sk_rc, _, sk_err = await _run(
+        "tmux", "send-keys", "-t", tmux_name, "Enter",
+    )
+    if sk_rc != 0:
+        sess.state = "error"
+        sess.error = f"send-keys (Enter) rc={sk_rc}: {sk_err.strip()[:200]}"
+        save_session(sess)
+        _log(f"start_session({sid}): {sess.error}")
+        return sess
+    _log(f"start_session({sid}): sent claude cmd ({len(claude_cmd)} chars)")
 
     # Don't block — return so the UI can show "Starting…". Client-side
     # poll on /sessions/{id}/refresh will pick up the URL when claude
