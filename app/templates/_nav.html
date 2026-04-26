@@ -12,6 +12,7 @@
     {% if nav_gh_logged_in %}<span class="dot ok" title="logged in"></span>
     {% else %}<span class="dot" title="not logged in"></span>{% endif %}
   </a>
+  <a href="/repos" class="nav-item {% if nav_active == 'repos' %}active{% endif %}">Repos</a>
 </nav>
 <style>
   .rcl-nav {

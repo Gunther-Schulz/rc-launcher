@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>{{ owner }}/{{ name }} — rc-launcher</title>
+  <style>
+    :root {
+      --bg: #0f1012;
+      --surface: #1a1c20;
+      --border: #2a2d33;
+      --text: #e8e9ea;
+      --muted: #898d94;
+      --accent: #7dd3fc;
+      --accent-bg: #0b2a3a;
+      --err-bg: #2e1515;
+      --err: #fca5a5;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
+    }
+    main {
+      max-width: 40em;
+      margin: 0 auto;
+      padding: max(1.25em, env(safe-area-inset-top)) 1em env(safe-area-inset-bottom);
+    }
+    h1 { font-weight: 600; font-size: 1.4em; margin: 0 0 0.25em; }
+    .muted { color: var(--muted); }
+    code { background: #222; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
+    a { color: var(--accent); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1em 1.2em;
+      margin: 1em 0;
+    }
+    .err {
+      background: var(--err-bg);
+      border: 1px solid #5b2323;
+      color: var(--err);
+    }
+    .branch-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.4em; }
+    .branch-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5em;
+      padding: 0.7em 0.9em;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .branch-row .name {
+      flex: 1;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.95em;
+      word-break: break-all;
+    }
+    .branch-row .badge {
+      font-size: 0.75em;
+      color: var(--muted);
+      padding: 0.05em 0.4em;
+      background: #2a2d33;
+      border-radius: 4px;
+    }
+    .branch-row .badge.default { background: var(--accent-bg); color: var(--accent); }
+    button {
+      padding: 0.55em 0.9em;
+      font: inherit;
+      font-size: 0.9em;
+      color: var(--accent);
+      background: var(--accent-bg);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  {% include "_nav.html" %}
+  <main>
+    <p class="muted" style="margin: 0; font-size: 0.85em">
+      <a href="/repos">← all repos</a>
+    </p>
+    <h1>{{ owner }}/{{ name }}</h1>
+    {% if repo %}
+      {% if repo.description %}<p class="muted" style="margin-top: 0">{{ repo.description }}</p>{% endif %}
+      <p class="muted" style="font-size: 0.85em">
+        {% if repo.language %}{{ repo.language }} · {% endif %}
+        default branch <code>{{ repo.default_branch }}</code> ·
+        <a href="{{ repo.html_url }}" target="_blank" rel="noopener">view on GitHub ↗</a>
+      </p>
+    {% endif %}
+
+    {% if error %}
+      <div class="card err">
+        <strong>Could not load branches.</strong>
+        <p style="margin: 0.4em 0 0">{{ error }}</p>
+      </div>
+    {% elif not branches %}
+      <p class="muted">No branches found. (Empty repository?)</p>
+    {% else %}
+      <h2 style="font-size: 1.05em; margin: 1.5em 0 0.5em">Pick a branch</h2>
+      <ul class="branch-list">
+        {% for b in branches %}
+        <li class="branch-row">
+          <span class="name">{{ b.name }}</span>
+          {% if repo and b.name == repo.default_branch %}<span class="badge default">default</span>{% endif %}
+          {% if b.protected %}<span class="badge">protected</span>{% endif %}
+          <span class="badge"><code>{{ b.commit_sha }}</code></span>
+          <form method="post" action="/sessions/start" style="margin: 0">
+            <input type="hidden" name="owner" value="{{ owner }}">
+            <input type="hidden" name="repo" value="{{ name }}">
+            <input type="hidden" name="branch" value="{{ b.name }}">
+            <button type="submit"
+                    data-loading-text="Starting…"
+                    disabled
+                    title="Phase 5 will wire this up — clones the repo and spawns claude --remote-control">
+              Start (Phase 5)
+            </button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="muted" style="font-size: 0.85em; margin-top: 1em">
+        The Start button is disabled until Phase 5 ships the session-launcher.
+      </p>
+    {% endif %}
+  </main>
+</body>
+</html>

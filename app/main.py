@@ -20,6 +20,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 from . import claude_login, gh_login
+from . import github_api
 
 _USERNAME = os.environ.get("RCL_USERNAME", "admin")
 _PASSWORD = os.environ.get("RCL_PASSWORD") or ""
@@ -171,3 +172,61 @@ async def gh_set_token(
 async def gh_logout_route(_user: str = Depends(require_auth)):
     gh_login.logout()
     return RedirectResponse(url="/gh", status_code=303)
+
+
+# ── Repo browsing (Phase 4) ────────────────────────────────────────────────
+
+
+@app.get("/repos", response_class=HTMLResponse)
+async def repos_page(request: Request, _user: str = Depends(require_auth)):
+    token = gh_login.get_token()
+    if not token:
+        return RedirectResponse(url="/gh", status_code=303)
+    error = None
+    repos: list[dict] = []
+    try:
+        repos = await github_api.list_repos(token)
+    except github_api.GitHubError as e:
+        error = e.message
+    except Exception as e:
+        error = f"Unexpected error: {e}"
+    return templates.TemplateResponse(
+        request=request,
+        name="repos.html",
+        context={"repos": repos, "error": error, **_nav_ctx("repos")},
+    )
+
+
+@app.get("/repos/{owner}/{repo}", response_class=HTMLResponse)
+async def repo_page(
+    request: Request,
+    owner: str,
+    repo: str,
+    _user: str = Depends(require_auth),
+):
+    token = gh_login.get_token()
+    if not token:
+        return RedirectResponse(url="/gh", status_code=303)
+    error = None
+    branches: list[dict] = []
+    repo_meta: Optional[dict] = None
+    try:
+        # Fetch repo + branches concurrently would be nicer; sequential is fine
+        repo_meta = await github_api.get_repo(token, owner, repo)
+        branches = await github_api.list_branches(token, owner, repo)
+    except github_api.GitHubError as e:
+        error = e.message
+    except Exception as e:
+        error = f"Unexpected error: {e}"
+    return templates.TemplateResponse(
+        request=request,
+        name="repo.html",
+        context={
+            "owner": owner,
+            "name": repo,
+            "repo": repo_meta,
+            "branches": branches,
+            "error": error,
+            **_nav_ctx("repos"),
+        },
+    )

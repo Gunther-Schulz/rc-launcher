@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Repos — rc-launcher</title>
+  <style>
+    :root {
+      --bg: #0f1012;
+      --surface: #1a1c20;
+      --border: #2a2d33;
+      --text: #e8e9ea;
+      --muted: #898d94;
+      --accent: #7dd3fc;
+      --accent-bg: #0b2a3a;
+      --err-bg: #2e1515;
+      --err: #fca5a5;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
+    }
+    main {
+      max-width: 50em;
+      margin: 0 auto;
+      padding: max(1.25em, env(safe-area-inset-top)) 1em env(safe-area-inset-bottom);
+    }
+    h1 { font-weight: 600; font-size: 1.6em; margin: 0 0 0.5em; }
+    .muted { color: var(--muted); }
+    code { background: #222; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
+    .err {
+      background: var(--err-bg);
+      border: 1px solid #5b2323;
+      border-radius: 12px;
+      padding: 1em 1.2em;
+      margin: 1em 0;
+      color: var(--err);
+    }
+    .filter-input {
+      width: 100%;
+      padding: 0.7em 1em;
+      font: inherit;
+      color: var(--text);
+      background: #0a0b0c;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      -webkit-appearance: none;
+      margin-bottom: 1em;
+    }
+    .repo-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5em; }
+    .repo {
+      display: block;
+      padding: 0.9em 1em;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .repo:hover, .repo:active { background: #1f2126; border-color: #3a3d43; }
+    .repo .name { font-weight: 600; font-size: 1.05em; }
+    .repo .desc { color: var(--muted); font-size: 0.9em; margin-top: 0.2em; }
+    .repo .meta { color: var(--muted); font-size: 0.8em; margin-top: 0.3em; display: flex; gap: 0.8em; flex-wrap: wrap; }
+    .repo .badge {
+      display: inline-block;
+      padding: 0.05em 0.4em;
+      border-radius: 4px;
+      font-size: 0.75em;
+      background: #2a2d33;
+      color: var(--muted);
+      margin-left: 0.4em;
+    }
+    .repo .badge.private { background: #2a1f0a; color: #fbbf24; }
+    .repo .badge.archived { background: #2a1515; color: var(--err); }
+    .repo .badge.fork { background: #1a2a1f; color: #86efac; }
+    .stats { color: var(--muted); font-size: 0.85em; margin-bottom: 0.8em; }
+  </style>
+</head>
+<body>
+  {% include "_nav.html" %}
+  <main>
+    <h1>Your repos</h1>
+    {% if error %}
+      <div class="err">
+        <strong>Could not load repos.</strong>
+        <p style="margin: 0.4em 0 0">{{ error }}</p>
+        <p class="muted" style="margin: 0.6em 0 0; font-size: 0.85em">
+          If the token was revoked, reconnect at <a href="/gh" style="color: var(--accent)">/gh</a>.
+        </p>
+      </div>
+    {% elif not repos %}
+      <p class="muted">No repos returned by GitHub. Verify your token has the <code>repo</code> scope at <a href="/gh">/gh</a>.</p>
+    {% else %}
+      <div class="stats">
+        {{ repos | length }} repo{% if repos | length != 1 %}s{% endif %} accessible to your token, sorted by recently pushed.
+        Tap one to pick a branch and start a session.
+      </div>
+      <input type="text" class="filter-input" id="filter" placeholder="Filter… (matches name, description, language)" autocomplete="off">
+      <ul class="repo-list" id="repo-list">
+        {% for r in repos %}
+        <li class="repo-row"
+            data-search="{{ (r.full_name + ' ' + (r.description or '') + ' ' + (r.language or '')) | lower }}">
+          <a class="repo" href="/repos/{{ r.owner }}/{{ r.name }}">
+            <div class="name">
+              {{ r.full_name }}
+              {% if r.private %}<span class="badge private">private</span>{% endif %}
+              {% if r.fork %}<span class="badge fork">fork</span>{% endif %}
+              {% if r.archived %}<span class="badge archived">archived</span>{% endif %}
+            </div>
+            {% if r.description %}<div class="desc">{{ r.description }}</div>{% endif %}
+            <div class="meta">
+              {% if r.language %}<span>{{ r.language }}</span>{% endif %}
+              <span>default: <code>{{ r.default_branch }}</code></span>
+              {% if r.pushed_at %}<span>pushed {{ r.pushed_at[:10] }}</span>{% endif %}
+            </div>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </main>
+  <script>
+    // Client-side filter (no network)
+    var input = document.getElementById('filter');
+    if (input) {
+      input.addEventListener('input', function () {
+        var q = input.value.trim().toLowerCase();
+        var rows = document.querySelectorAll('.repo-row');
+        rows.forEach(function (row) {
+          if (!q || row.dataset.search.indexOf(q) !== -1) {
+            row.style.display = '';
+          } else {
+            row.style.display = 'none';
+          }
+        });
+      });
+    }
+  </script>
+</body>
+</html>

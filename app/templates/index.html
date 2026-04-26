@@ -88,11 +88,18 @@
       </div>
     </div>
 
+    {% if claude_logged_in and gh_logged_in %}
+    <h2>Browse</h2>
+    <div class="card">
+      <a href="/repos">Your repos →</a>
+      <div class="status" style="margin-top: 0.4em">Pick a repo and a branch.</div>
+    </div>
+    {% endif %}
+
     <h2>Coming in later phases</h2>
     <div class="card muted">
       <ul style="padding-left: 1.2em; margin: 0">
-        <li>Phase 4: repo list, start session.</li>
-        <li>Phase 5: session management + RC URLs (the actual mobile-tap link).</li>
+        <li>Phase 5: clone + spawn <code>claude --remote-control</code> + show the tap-able RC URL.</li>
       </ul>
     </div>
   </main>
