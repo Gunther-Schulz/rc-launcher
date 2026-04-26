@@ -291,6 +291,7 @@ class Session:
     tmux_session: str
     worktree_path: str
     log_path: str
+    debug_path: str = ""
     rc_url: Optional[str] = None
     state: str = "starting"   # starting | running | stopped | error
     error: Optional[str] = None
@@ -432,6 +433,7 @@ async def start_session(
     # Truncate any prior log so we don't match an old URL on restart.
     log_path.write_text("")
 
+    debug_path = sess_dir / "claude-debug.log"
     sess = Session(
         id=sid,
         owner=owner,
@@ -440,16 +442,22 @@ async def start_session(
         tmux_session=tmux_name,
         worktree_path=str(prep.worktree_path),
         log_path=str(log_path),
+        debug_path=str(debug_path),
     )
     save_session(sess)
 
-    # Spawn claude with its stdout still connected to tmux's pty (TUI
-    # apps refuse to run when stdout is a pipe — earlier `tee`-based
-    # version died immediately). Capture is set up as a side-channel via
-    # tmux pipe-pane right after, so claude doesn't see a pipe but we
-    # still get a copy of every byte for URL scanning.
-    _log(f"start_session({sid}): tmux new-session -s {tmux_name} cwd={prep.worktree_path}")
-    rc, err = await tmux_spawn(tmux_name, prep.worktree_path, "claude remote-control")
+    # Spawn an empty session first (default shell). Two reasons:
+    #   1. The shell survives `claude` exiting, so we can still inspect
+    #      the pane via `tmux capture-pane` to diagnose what happened.
+    #   2. pipe-pane requires the tmux server to be running — earlier
+    #      version had pipe-pane race ahead of a session that was
+    #      already dying, getting "no server running".
+    _log(f"start_session({sid}): tmux new-session -d -s {tmux_name} cwd={prep.worktree_path}")
+    rc, _, err = await _run(
+        "tmux", "new-session", "-d", "-s", tmux_name,
+        "-c", str(prep.worktree_path),
+        timeout=15.0,
+    )
     if rc != 0:
         sess.state = "error"
         sess.error = f"tmux spawn failed (rc={rc}): {err.strip()[:300]}"
@@ -457,22 +465,42 @@ async def start_session(
         _log(f"start_session({sid}): {sess.error}")
         return sess
 
-    # pipe-pane captures the pane's output stream to our log file.
-    # Race window is microseconds (vs claude's ~1-2s startup) so we'll
-    # see the URL line.
+    # Capture the pane's output to a log file. Catches the URL line
+    # that claude prints, plus anything else (errors, prompts).
     pipe_cmd = f"cat > {shlex.quote(str(log_path))}"
     pp_rc, _, pp_err = await _run(
         "tmux", "pipe-pane", "-t", tmux_name, pipe_cmd,
     )
     if pp_rc != 0:
         _log(f"start_session({sid}): pipe-pane rc={pp_rc}: {pp_err.strip()[:200]}")
-        # Non-fatal — claude is still running, just not captured. UI will
-        # show 'starting' indefinitely until the user stops/restarts.
+
+    # Now send the claude command into the running shell. With
+    # --debug-file, claude writes its own diagnostic log we can surface
+    # if things go wrong.
+    claude_cmd = f"claude remote-control --debug-file {shlex.quote(str(debug_path))}"
+    sk_rc, _, sk_err = await _run(
+        "tmux", "send-keys", "-t", tmux_name, claude_cmd, "Enter",
+    )
+    if sk_rc != 0:
+        sess.state = "error"
+        sess.error = f"send-keys rc={sk_rc}: {sk_err.strip()[:200]}"
+        save_session(sess)
+        _log(f"start_session({sid}): {sess.error}")
+        return sess
 
     # Don't block — return so the UI can show "Starting…". Client-side
     # poll on /sessions/{id}/refresh will pick up the URL when claude
-    # emits it (typically within 1-2s).
+    # emits it (typically within 1-2s), or surface a stuck pane.
     return sess
+
+
+async def capture_pane(name: str) -> str:
+    """Snapshot of the current pane (everything visible). Useful for
+    diagnosis when the URL never appears in the log."""
+    rc, out, _ = await _run(
+        "tmux", "capture-pane", "-p", "-t", name, timeout=5.0,
+    )
+    return out if rc == 0 else ""
 
 
 async def refresh_session(sid: str) -> Optional[Session]:
@@ -489,15 +517,22 @@ async def refresh_session(sid: str) -> Optional[Session]:
             save_session(sess)
         return sess
 
-    # tmux alive — try to capture URL if we don't have one yet.
+    # tmux alive — try to capture URL from the log first, then fall
+    # back to the pane snapshot (catches the case where pipe-pane
+    # didn't capture in time but the URL is still on screen).
     if not sess.rc_url:
         url = _scan_for_url(Path(sess.log_path))
+        if not url:
+            pane = await capture_pane(sess.tmux_session)
+            stripped = _ANSI_RE.sub("", pane)
+            m = _RC_URL_RE.search(stripped)
+            if m:
+                url = m.group(0)
         if url:
             sess.rc_url = url
             sess.state = "running"
             save_session(sess)
     elif sess.state != "running":
-        # We have a URL but state drifted — fix.
         sess.state = "running"
         save_session(sess)
     return sess

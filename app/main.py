@@ -388,3 +388,38 @@ async def session_stop(
 ):
     await sessions.stop_session(sid)
     return RedirectResponse(url=f"/sessions/{sid}", status_code=303)
+
+
+@app.get("/api/diag/session/{sid}")
+async def diag_session(
+    sid: str,
+    _user: str = Depends(require_auth),
+):
+    """Diagnostic snapshot for debugging spawn failures: pane content +
+    captured log + claude debug log. Temporary — remove once Slice 2 is
+    rock-solid."""
+    sess = sessions.load_session(sid)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    pane = await sessions.capture_pane(sess.tmux_session)
+    log = ""
+    debug = ""
+    try:
+        log = Path(sess.log_path).read_text(errors="replace")
+    except FileNotFoundError:
+        pass
+    try:
+        debug = Path(sess.debug_path).read_text(errors="replace") if sess.debug_path else ""
+    except FileNotFoundError:
+        pass
+    return JSONResponse({
+        "id": sess.id,
+        "state": sess.state,
+        "rc_url": sess.rc_url,
+        "tmux_alive": await sessions.tmux_has_session(sess.tmux_session),
+        "pane_capture": pane,
+        "log_size": len(log),
+        "log_tail": log[-2000:],
+        "debug_size": len(debug),
+        "debug_tail": debug[-2000:],
+    })
