@@ -170,6 +170,9 @@ async def ensure_clone(token: str, owner: str, repo: str) -> Path:
         r = await _with_token_url(token, owner, repo, target, fetch)
         if not r.ok:
             raise PrepError(f"git fetch failed: {r.stderr.strip()[:300]}")
+        # Make sure HEAD is detached (idempotent) — covers clones created
+        # before the detach-on-clone behavior was added.
+        await _run_git(target, "checkout", "--detach", "HEAD")
         return target
 
     _log(f"ensure_clone: cloning github.com/{owner}/{repo} → {target}")
@@ -184,6 +187,12 @@ async def ensure_clone(token: str, owner: str, repo: str) -> Path:
         raise PrepError(f"git clone failed: {r.stderr.strip()[:300]}")
     # Scrub token from remote URL immediately.
     await _run_git(target, "remote", "set-url", "origin", _bare_url(owner, repo))
+    # Detach HEAD in the main clone so the default branch is free to be
+    # checked out as a worktree under _wt/. Without this, the first
+    # `worktree add -B master ...` fails with "branch already in use".
+    r = await _run_git(target, "checkout", "--detach", "HEAD")
+    if not r.ok:
+        raise PrepError(f"git checkout --detach failed: {r.stderr.strip()[:300]}")
     return target
 
 
