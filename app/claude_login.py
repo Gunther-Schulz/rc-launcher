@@ -34,21 +34,18 @@ import shutil
 import signal
 import struct
 import subprocess
-import sys
 import termios
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
-# Claude also keeps a user-level config outside the .claude dir and a
-# backups/ subdir. If login is starting fresh we wipe these so claude
-# doesn't hang on a "config-not-found, restore from backup?" prompt.
-CLAUDE_JSON = Path.home() / ".claude.json"
-CLAUDE_BACKUPS_DIR = Path.home() / ".claude" / "backups"
+from ._logging import make_logger
 
+CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_BIN = shutil.which("claude") or "/usr/local/share/npm-global/bin/claude"
+
+_log = make_logger("claude_login")
 
 OAUTH_URL_RE = re.compile(
     r"https://(?:claude\.com|claude\.ai|console\.anthropic\.com)"
@@ -71,11 +68,6 @@ VERIFY_TIMEOUT = 20
 
 PTY_COLS = 1000
 PTY_ROWS = 50
-
-
-def _log(msg: str) -> None:
-    ts = time.strftime("%H:%M:%S") + f".{int((time.time() % 1) * 1000):03d}"
-    print(f"[claude_login {ts}] {msg}", flush=True, file=sys.stdout)
 
 
 def _safe_preview(b: bytes, n: int = 240) -> str:
@@ -220,7 +212,6 @@ async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
     last_enter = 0.0
     last_log_size = 0
     ENTER_EVERY = 2.0
-    iters_with_data = 0
     while time.time() < deadline:
         try:
             chunk = os.read(master_fd, 4096)
@@ -234,7 +225,6 @@ async def _read_until_url(master_fd: int, deadline: float) -> Optional[str]:
             return None
         if chunk:
             _state.stdout_buf += chunk
-            iters_with_data += 1
             # Log new-bytes preview when buffer grows by >= 50 bytes
             if len(_state.stdout_buf) - last_log_size >= 50:
                 new_bytes = _state.stdout_buf[last_log_size:]
@@ -272,18 +262,6 @@ async def start_login() -> LoginState:
     if _state.process is not None:
         _log("start: prior process exists; cleaning up before fresh spawn")
     _cleanup()
-    # Purge residual claude state so login starts clean.
-    purged = []
-    try:
-        CLAUDE_JSON.unlink()
-        purged.append(str(CLAUDE_JSON))
-    except FileNotFoundError:
-        pass
-    if CLAUDE_BACKUPS_DIR.exists():
-        shutil.rmtree(CLAUDE_BACKUPS_DIR, ignore_errors=True)
-        purged.append(str(CLAUDE_BACKUPS_DIR))
-    if purged:
-        _log(f"start: purged residual state: {purged}")
 
     _state = LoginState(status="awaiting_code", started_at=time.time())
 

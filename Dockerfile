@@ -1,12 +1,14 @@
 # syntax=docker/dockerfile:1.6
 #
-# rc-launcher: small Coolify app that spawns `claude --remote-control`
+# rc-launcher — small Coolify app that spawns `claude --remote-control`
 # sessions on a git repo/branch and surfaces the resulting Claude Remote
 # Control URLs as tap-able links. Intended for mobile-first use with the
 # native Claude app (no embedded web terminal).
 #
-# Phase 1: skeleton — Python + claude + gh preinstalled, FastAPI hello page.
-# Phase 2+ will add the claude/gh OAuth wrap flows and session management.
+# Image layers: devcontainer JS-Node-20 base + apt deps + Claude Code CLI
+# + GitHub CLI (kept for shell-into convenience; not used in the app's
+# running flow — we use the GitHub REST API via httpx) + Python venv with
+# FastAPI/uvicorn/jinja2/httpx.
 
 FROM mcr.microsoft.com/devcontainers/javascript-node:20
 
@@ -25,9 +27,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code
 
-# GitHub CLI from the official package (needed for device-code auth wrap
-# and repo listing later — not used in Phase 1 but preinstalled to keep
-# image layers stable across phases).
+# GitHub CLI — installed for shell-into convenience (running `gh` from
+# Coolify's web terminal, etc). Our application code uses the GitHub
+# REST API via httpx with a stored PAT — gh is NOT in the running flow.
 RUN /usr/bin/install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \

@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import httpx
+
+from ._logging import make_logger
 
 DATA_DIR = Path(os.environ.get("RCL_DATA_DIR", "/var/lib/rcl/data"))
 TOKEN_FILE = DATA_DIR / "github-token"
@@ -35,10 +36,7 @@ USER_FILE = DATA_DIR / "github-user.json"
 GITHUB_API = "https://api.github.com"
 USER_AGENT = "rc-launcher/0.1 (+https://github.com/Gunther-Schulz/rc-launcher)"
 
-
-def _log(msg: str) -> None:
-    ts = time.strftime("%H:%M:%S") + f".{int((time.time() % 1) * 1000):03d}"
-    print(f"[gh_login {ts}] {msg}", flush=True, file=sys.stdout)
+_log = make_logger("gh_login")
 
 
 def _ensure_data_dir() -> None:

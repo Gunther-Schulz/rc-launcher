@@ -1,26 +1,43 @@
-"""rc-launcher — Phase 2.
+"""rc-launcher — Coolify-deployed mobile-first launcher for Claude Code
+sessions running on a server.
 
-Adds the `claude login` OAuth wrap: tap-able URL + paste-code form.
-Delegates the pty dance to `claude_login.py`.
+Routes (HTTP Basic Auth on everything except /api/health):
+  GET  /                  home / status overview
+  GET  /api/health        liveness probe (no auth)
+  GET  /api/diag/...      diagnostic snapshots (auth, may be removed)
 
-Auth: HTTP Basic Auth enforced in-app (see require_auth). Password from
-$RCL_PASSWORD env var, which Coolify populates from SERVICE_PASSWORD_ADMIN.
+  GET  /claude            claude-login state page
+  POST /claude/login/start
+  POST /claude/login/code
+  POST /claude/logout
+  POST /claude/verify     spawn `claude --print` to confirm credentials work
+
+  GET  /gh                GitHub PAT page
+  POST /gh/token
+  POST /gh/logout
+
+  GET  /repos             list repos accessible to the stored PAT
+  POST /repos/open        parse a pasted GitHub URL → repo detail
+  GET  /repos/{o}/{r}     repo detail + branches list
+
+Auth: HTTP Basic Auth in-app (Coolify's native flag doesn't propagate
+to compose-deploy Traefik labels). Password from $RCL_PASSWORD, which
+Coolify populates from $SERVICE_PASSWORD_ADMIN at install time.
 """
 from __future__ import annotations
 
 import os
 import secrets
 from pathlib import Path
-
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
-from . import claude_login, gh_login
-from . import github_api
+from . import claude_login, gh_login, github_api
 
 _USERNAME = os.environ.get("RCL_USERNAME", "admin")
 _PASSWORD = os.environ.get("RCL_PASSWORD") or ""
@@ -68,7 +85,6 @@ def index(request: Request, _user: str = Depends(require_auth)):
         request=request,
         name="index.html",
         context={
-            "phase": 3,
             "claude_logged_in": claude_login.logged_in(),
             "gh_logged_in": gh_login.logged_in(),
             **_nav_ctx("home"),
@@ -77,14 +93,16 @@ def index(request: Request, _user: str = Depends(require_auth)):
 
 
 @app.get("/api/health")
-def health(_user: str = Depends(require_auth)) -> JSONResponse:
-    return JSONResponse({"ok": True, "phase": 3})
+def health() -> JSONResponse:
+    """Public liveness probe — no auth required, suitable for external
+    monitoring (Coolify's own health check, uptime services, etc).
+    Reports nothing sensitive."""
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/diag/claude-home")
 def diag_claude_home(_user: str = Depends(require_auth)) -> JSONResponse:
     """Snapshot of /home/node/.claude — diagnostic, may be removed later."""
-    from pathlib import Path
     base = Path("/home/node/.claude")
     out: dict = {"exists": base.exists(), "entries": []}
     if base.exists():
@@ -129,8 +147,6 @@ def claude_page(
 @app.post("/claude/verify")
 async def claude_verify(_user: str = Depends(require_auth)):
     ok, msg = await claude_login.verify()
-    # Pass result via query string so the redirected GET can render it.
-    from urllib.parse import urlencode
     qs = urlencode({"verify_ok": "1" if ok else "0", "verify_msg": msg})
     return RedirectResponse(url=f"/claude?{qs}", status_code=303)
 
@@ -185,7 +201,6 @@ async def gh_set_token(
     ok, msg = await gh_login.set_token(token)
     if ok:
         return RedirectResponse(url="/gh", status_code=303)
-    from urllib.parse import urlencode
     qs = urlencode({"last_error": msg})
     return RedirectResponse(url=f"/gh?{qs}", status_code=303)
 
@@ -196,7 +211,7 @@ async def gh_logout_route(_user: str = Depends(require_auth)):
     return RedirectResponse(url="/gh", status_code=303)
 
 
-# ── Repo browsing (Phase 4) ────────────────────────────────────────────────
+# ── Repo browsing ──────────────────────────────────────────────────────────
 
 
 @app.get("/repos", response_class=HTMLResponse)
@@ -236,7 +251,6 @@ async def repos_open(
     """Parse a pasted GitHub URL/shorthand → redirect to /repos/{owner}/{repo}."""
     parsed = github_api.parse_repo_ref(ref)
     if not parsed:
-        from urllib.parse import urlencode
         msg = (
             f"Could not parse {ref!r} as a GitHub repo. "
             "Expected formats: https://github.com/owner/repo, "
@@ -262,7 +276,6 @@ async def repo_page(
     branches: list[dict] = []
     repo_meta: Optional[dict] = None
     try:
-        # Fetch repo + branches concurrently would be nicer; sequential is fine
         repo_meta = await github_api.get_repo(token, owner, repo)
         branches = await github_api.list_branches(token, owner, repo)
     except github_api.GitHubError as e:

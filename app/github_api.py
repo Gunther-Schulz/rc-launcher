@@ -2,19 +2,17 @@
 from __future__ import annotations
 
 import re
-import sys
 import time
 from typing import Optional
 
 import httpx
 
+from ._logging import make_logger
+
 GITHUB_API = "https://api.github.com"
 USER_AGENT = "rc-launcher/0.1 (+https://github.com/Gunther-Schulz/rc-launcher)"
 
-
-def _log(msg: str) -> None:
-    ts = time.strftime("%H:%M:%S") + f".{int((time.time() % 1) * 1000):03d}"
-    print(f"[github_api {ts}] {msg}", flush=True, file=sys.stdout)
+_log = make_logger("github_api")
 
 
 class GitHubError(Exception):

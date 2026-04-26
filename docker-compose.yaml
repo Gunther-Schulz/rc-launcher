@@ -1,8 +1,10 @@
 # rc-launcher — Claude Remote Control session launcher, Coolify template.
 #
-# Post-deploy you enable HTTP Basic Auth on the app in Coolify UI
-# (General → HTTP Basic Auth → toggle on, set user+password). Traefik
-# gates every request at the edge; the app itself has no auth code.
+# Auth: HTTP Basic Auth is enforced inside the FastAPI app (Coolify v4-beta's
+# native HTTP-Basic-Auth toggle does NOT inject Traefik middleware labels for
+# compose-deploy services, so we wire RFC-7617 ourselves). On install Coolify
+# auto-generates SERVICE_PASSWORD_ADMIN; the username defaults to `admin`.
+# Both visible/editable in Coolify's Environment Variables panel.
 
 services:
   rcl:
@@ -17,9 +19,9 @@ services:
       - "8080"
     labels:
       # Coolify v4-beta doesn't auto-wire Traefik for compose deploys and
-      # escapes $ in label values, so we catch-all at the lowest priority.
-      # When HTTP Basic Auth is enabled in Coolify, Coolify injects its
-      # middleware labels automatically alongside these.
+      # escapes $ in label values, so we use a low-priority catch-all
+      # HostRegexp. Any other Coolify app with a specific Host rule wins;
+      # this catches our service's assigned FQDN.
       - traefik.enable=true
       - traefik.http.routers.rcl-http.rule=HostRegexp(`.+`)
       - traefik.http.routers.rcl-http.entryPoints=http
@@ -27,13 +29,11 @@ services:
       - traefik.http.services.rcl-http.loadbalancer.server.port=8080
     volumes:
       - claude:/home/node/.claude
-      - gh-config:/home/node/.config/gh
       - workspace:/workspace
       - data:/var/lib/rcl
     restart: unless-stopped
 
 volumes:
   claude:
-  gh-config:
   workspace:
   data:
