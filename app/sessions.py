@@ -446,23 +446,39 @@ async def start_session(
     )
     save_session(sess)
 
-    # Spawn an empty session first (default shell). Two reasons:
-    #   1. The shell survives `claude` exiting, so we can still inspect
-    #      the pane via `tmux capture-pane` to diagnose what happened.
-    #   2. pipe-pane requires the tmux server to be running — earlier
-    #      version had pipe-pane race ahead of a session that was
-    #      already dying, getting "no server running".
+    # Spawn an empty session first (default shell). The shell survives
+    # `claude` exiting, so we can still inspect the pane via
+    # `tmux capture-pane` to diagnose what happened.
+    #
+    # CRITICAL: `tmux new-session -d` daemonises the tmux server, and
+    # the daemon inherits the client's stdin/stdout/stderr file
+    # descriptors. If we use subprocess.PIPE for those, communicate()
+    # blocks waiting for EOF that never arrives (the daemon keeps the
+    # FDs open for the entire session lifetime). DEVNULL gives the
+    # daemon nothing to hold onto, so the client exits cleanly.
+    # Other tmux subcommands don't fork the daemon and are fine with
+    # the regular PIPE-based _run.
     _log(f"start_session({sid}): tmux new-session -d -s {tmux_name} cwd={prep.worktree_path}")
-    rc, _, err = await _run(
-        "tmux", "new-session", "-d", "-s", tmux_name,
-        "-c", str(prep.worktree_path),
-        timeout=15.0,
-    )
-    if rc != 0:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "new-session", "-d", "-s", tmux_name,
+            "-c", str(prep.worktree_path),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        rc = await asyncio.wait_for(proc.wait(), timeout=10.0)
+    except asyncio.TimeoutError:
         sess.state = "error"
-        sess.error = f"tmux spawn failed (rc={rc}): {err.strip()[:300]}"
+        sess.error = "tmux new-session timed out after 10s"
         save_session(sess)
         _log(f"start_session({sid}): {sess.error}")
+        return sess
+    _log(f"start_session({sid}): new-session rc={rc}")
+    if rc != 0:
+        sess.state = "error"
+        sess.error = f"tmux spawn failed (rc={rc})"
+        save_session(sess)
         return sess
 
     # Capture the pane's output to a log file. Catches the URL line
