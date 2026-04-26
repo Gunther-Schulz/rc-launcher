@@ -104,74 +104,101 @@ Easy to amend on the main machine if it bothers you.
 (research preview is live for them), saw the cloud environment
 creation form. Did not yet finish the test.
 
-**Open test plan:**
-1. Create a cloud environment with a setup script that bootstraps
-   `~/.claude/CLAUDE.md` from the dotfiles repo (Approach A — write
-   into VM home dir):
+**Recommended bootstrap pattern: write user-level config into the
+VM's `~/.claude/`.**
+
+Key insight: the cloud VM is just an Ubuntu machine running the same
+`claude` binary as your laptop. Whatever claude reads from `~/.claude/`
+locally, it should read from `~/.claude/` in the cloud VM if the
+setup script puts the file there. The CCotW docs that say "your
+`~/.claude/CLAUDE.md` doesn't transfer" are about what comes FROM
+your local machine — they don't say claude refuses to read VM-local
+user-level config.
+
+This means the setup script can write **any** user-level config the
+local claude reads:
+
+| Path | What it provides |
+|---|---|
+| `~/.claude/CLAUDE.md` | Global preferences |
+| `~/.claude/skills/` | Global skills |
+| `~/.claude/agents/` | Global agents |
+| `~/.claude/commands/` | Global slash commands |
+| `~/.claude/settings.json` | Hooks block + other settings |
+
+All without touching the repo working dir → zero git pollution, no
+`.gitignore` needed.
+
+**Suggested setup script** (extend as `claude/` in dotfiles grows):
+```bash
+#!/bin/bash
+set -e
+git clone --depth=1 https://github.com/Gunther-Schulz/dotfiles.git /tmp/dotfiles
+mkdir -p ~/.claude
+# rsync everything from dotfiles claude/ into ~/.claude/ — future-proof
+# as you add skills, agents, MCP, hooks to the dotfiles claude/ dir.
+rsync -a /tmp/dotfiles/claude/ ~/.claude/
+echo "Bootstrap done at $(date)" > /tmp/bootstrap-marker.txt
+```
+
+**Test the pattern works in CCotW:**
+1. Add the script above as the setup script for a cloud environment.
+2. Start a session in any small repo, ask:
+   - *"Read `~/.claude/CLAUDE.md` and tell me the first heading."*
+   - *"List all skills you have available"* (once you add skills to
+     `dotfiles/claude/skills/`).
+   - *"Confirm `/tmp/bootstrap-marker.txt` exists."*
+3. **If claude shows the CLAUDE.md content + lists your skills:** the
+   pattern works as expected, no fallback needed.
+4. **If claude doesn't see the user-level config in the VM** (per the
+   docs being silent on this, possible but not the most likely
+   outcome): fall back to writing the same files into the *repo*'s
+   `.claude/` and `CLAUDE.md` from the setup script, plus a global
+   gitignore via the setup script:
    ```bash
-   #!/bin/bash
-   set -e
-   git clone --depth=1 https://github.com/Gunther-Schulz/dotfiles.git /tmp/dotfiles
-   mkdir -p ~/.claude
-   cp /tmp/dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
-   echo "Bootstrap done at $(date)" > /tmp/bootstrap-marker.txt
+   mkdir -p ~/.config/git
+   cat > ~/.config/git/ignore <<'EOF'
+   .claude/
+   .mcp.json
+   CLAUDE.md
+   EOF
    ```
-2. Start a session in any small repo, ask: *"Read
-   `~/.claude/CLAUDE.md` and tell me the first heading. Confirm
-   `/tmp/bootstrap-marker.txt` exists."*
-3. **If claude reads the file content out:** Approach A works. The
-   bootstrap story is: setup script writes to `~/.claude/`, repo
-   stays clean (no git pollution).
-4. **If claude does NOT read it** (CCotW only loads repo-level
-   CLAUDE.md per docs): fall back to **Approach C** — setup script
-   writes a global gitignore (`~/.config/git/ignore` containing
-   `.claude/`, `.mcp.json`, `CLAUDE.md`) and then injects into the
-   repo working dir. Files exist on disk for claude to read but never
-   appear in `git status`.
+   This keeps `git status` clean even though the files live in the
+   working dir.
 
-This open test is the highest-priority next thing if continuing on a
-new machine. It validates the entire "bootstrap any GitHub repo with
-my standard config" workflow.
+**Honest caveat:** I haven't *tested* that claude in the CCotW VM
+reads user-level config the setup script created. Plausible from how
+claude works generally, but worth verifying with the test above
+before committing.
 
-### Bootstrap pattern: skills + MCP + CLAUDE.md (broader than just CLAUDE.md)
+### What CCotW auto-loads from the cloned repo (independent of the bootstrap)
 
-The test above only covers CLAUDE.md because that's all `claude/` in
-dotfiles currently contains. The full bootstrap story Anthropic
-documents — and what was discussed this session — is broader. Per the
-CCotW docs, what gets loaded automatically in a cloud session:
+Setup script aside, the repo itself can carry config that CCotW
+loads automatically. Per the docs:
 
-| File / dir | Loaded? | Source |
-|---|---|---|
-| Repo's `CLAUDE.md` | Yes | Part of the clone |
-| Repo's `.claude/settings.json` hooks | Yes | Part of the clone |
-| Repo's `.mcp.json` MCP servers | Yes | Part of the clone |
-| Repo's `.claude/skills/` | Yes | Part of the clone |
-| Repo's `.claude/agents/` | Yes | Part of the clone |
-| Repo's `.claude/commands/` | Yes | Part of the clone |
-| Repo's `.claude/rules/` | Yes | Part of the clone |
-| Plugins declared in `.claude/settings.json` | Yes | Installed at session start |
-| User-level `~/.claude/CLAUDE.md` | NOT documented as loaded | (test plan above checks this) |
-| User-level `~/.claude/skills/` etc. | NOT documented as loaded | Same as above |
+| Repo file / dir | Loaded? |
+|---|---|
+| `CLAUDE.md` | Yes |
+| `.claude/settings.json` hooks | Yes |
+| `.mcp.json` MCP servers | Yes |
+| `.claude/skills/` | Yes |
+| `.claude/agents/` | Yes |
+| `.claude/commands/` | Yes |
+| `.claude/rules/` | Yes |
+| Plugins declared in `.claude/settings.json` | Yes |
 
-**Implication for the bootstrap:** if the cloud VM only loads
-*repo-level* `.claude/`, then the cleanest bootstrap pattern is for
-the setup script to copy from the dotfiles repo into the working
-repo's `.claude/` (Approach C variant — extended to skills + MCP +
-hooks, not just CLAUDE.md). With a global gitignore covering
-`.claude/`, `.mcp.json`, and `CLAUDE.md`, none of it appears in
-`git status`.
+So a project repo can have its OWN `.claude/` for project-specific
+config, alongside whatever the global bootstrap brings. They compose.
 
-**Future direction worth considering:** grow the dotfiles `claude/`
-dir to include:
-- `claude/skills/` — your standard skills (the kind `update-config`,
-  `simplify`, `fewer-permission-prompts` provide; you could write your
+**Future direction:** grow the dotfiles `claude/` dir to include:
+- `claude/skills/` — global skills (the kind `update-config`,
+  `simplify`, `fewer-permission-prompts` provide; you can write your
   own for recurring tasks)
 - `claude/.mcp.json` — MCP servers you always want available
-- `claude/.claude/settings.json` — hooks you always want active
+- `claude/settings.json` — hooks you always want active
 
-Then setup script extends the existing CLAUDE.md copy to include
-those files. That gets the "bootstrap any repo with my full standard
-config" workflow.
+The setup script using `rsync -a` already handles new files added to
+the dotfiles `claude/` dir without modification.
 
 ### Skill-craft as a reference for skill design
 
@@ -208,6 +235,19 @@ then `claude plugin install skill-craft@skill-craft-marketplace`.
    claude session and paste the contents of THIS file as the first
    message, plus any follow-up direction. That gives the new session
    enough to pick up.
+
+## Considered and rejected: rc-launcher as a unified UI over CCotW
+
+Briefly considered extending rc-launcher to spawn either local
+self-hosted envs OR drive Claude Code on the Web via API (one UI
+covers both). Rejected because: CCotW's web UI is already polished
+and continuously updated by Anthropic; wrapping it means perpetually
+trailing on features and maintaining a thin layer over an evolving
+product. Better to keep the two as focused tools — CCotW for the
+primary workflow, rc-launcher frozen as the niche self-hosted
+fallback. Open question if anyone revisits: does CCotW expose a
+public REST API for programmatic session creation, or is `claude
+--remote` the only entry point? (Not researched.)
 
 ## Sunset checklist (if rc-launcher is freezing)
 
