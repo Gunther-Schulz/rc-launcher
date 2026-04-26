@@ -443,22 +443,31 @@ async def start_session(
     )
     save_session(sess)
 
-    # Spawn: pipe claude's combined output through tee into our log.
-    # The shell command ensures `tee` survives tmux's TERM signal long
-    # enough to flush — wrapping in bash -c keeps quoting predictable.
-    spawn_cmd = (
-        f"exec claude remote-control 2>&1 "
-        f"| tee {shlex.quote(str(log_path))}"
-    )
-    bash_wrapper = f"bash -c {shlex.quote(spawn_cmd)}"
+    # Spawn claude with its stdout still connected to tmux's pty (TUI
+    # apps refuse to run when stdout is a pipe — earlier `tee`-based
+    # version died immediately). Capture is set up as a side-channel via
+    # tmux pipe-pane right after, so claude doesn't see a pipe but we
+    # still get a copy of every byte for URL scanning.
     _log(f"start_session({sid}): tmux new-session -s {tmux_name} cwd={prep.worktree_path}")
-    rc, err = await tmux_spawn(tmux_name, prep.worktree_path, bash_wrapper)
+    rc, err = await tmux_spawn(tmux_name, prep.worktree_path, "claude remote-control")
     if rc != 0:
         sess.state = "error"
         sess.error = f"tmux spawn failed (rc={rc}): {err.strip()[:300]}"
         save_session(sess)
         _log(f"start_session({sid}): {sess.error}")
         return sess
+
+    # pipe-pane captures the pane's output stream to our log file.
+    # Race window is microseconds (vs claude's ~1-2s startup) so we'll
+    # see the URL line.
+    pipe_cmd = f"cat > {shlex.quote(str(log_path))}"
+    pp_rc, _, pp_err = await _run(
+        "tmux", "pipe-pane", "-t", tmux_name, pipe_cmd,
+    )
+    if pp_rc != 0:
+        _log(f"start_session({sid}): pipe-pane rc={pp_rc}: {pp_err.strip()[:200]}")
+        # Non-fatal — claude is still running, just not captured. UI will
+        # show 'starting' indefinitely until the user stops/restarts.
 
     # Don't block — return so the UI can show "Starting…". Client-side
     # poll on /sessions/{id}/refresh will pick up the URL when claude
