@@ -132,6 +132,22 @@ if [ ! -f /home/node/.claude/CLAUDE.md ]; then
   echo "--- seeding ~/.claude/CLAUDE.md from template ---"
   cp /opt/rcl/seed/CLAUDE.md /home/node/.claude/CLAUDE.md
 fi
+
+# Restore ~/.claude.json from the most recent backup if it's missing.
+# Background: an earlier rc-launcher revision purged this file on every
+# boot. We removed the purge in Round 1, but on existing deployments the
+# file was already gone — leaving claude unable to determine the user's
+# organization (Remote Control needs that). claude itself keeps timestamped
+# backups under ~/.claude/backups/, so a missing-but-backed-up state is
+# losslessly recoverable. Idempotent: only restores when the file is gone.
+if [ ! -f /home/node/.claude.json ]; then
+  LATEST_BACKUP=$(ls -1t /home/node/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
+  if [ -n "$LATEST_BACKUP" ]; then
+    echo "--- restoring ~/.claude.json from $LATEST_BACKUP ---"
+    cp "$LATEST_BACKUP" /home/node/.claude.json
+    chown node:node /home/node/.claude.json
+  fi
+fi
 echo "=== end boot ==="
 
 exec sudo -u node -E HOME=/home/node \
