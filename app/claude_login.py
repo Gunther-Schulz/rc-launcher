@@ -469,3 +469,37 @@ async def logout() -> None:
         _log("logout: credentials removed")
     else:
         _log("logout: no credentials file to remove")
+
+
+async def wipe() -> None:
+    """Aggressive reset: remove ALL claude auth state so the next login
+    starts clean. Keeps user-edited files (CLAUDE.md, settings.json) and
+    conversation history (projects/, sessions/). Use when partial state
+    from old claude versions is interfering with a fresh login flow."""
+    global _state
+    _log("wipe: clearing auth + cached account state")
+    _cleanup()
+    _state = LoginState(status="idle")
+
+    home = Path.home()
+    targets = [
+        home / ".claude.json",                  # account/org cache
+        home / ".claude" / ".credentials.json", # OAuth tokens
+    ]
+    for p in targets:
+        try:
+            p.unlink()
+            _log(f"wipe: removed {p}")
+        except FileNotFoundError:
+            _log(f"wipe: {p} not present, skipping")
+        except OSError as e:
+            _log(f"wipe: failed to remove {p}: {e}")
+
+    backups_dir = home / ".claude" / "backups"
+    if backups_dir.exists():
+        import shutil as _sh
+        try:
+            _sh.rmtree(backups_dir)
+            _log(f"wipe: removed {backups_dir}")
+        except OSError as e:
+            _log(f"wipe: failed to remove {backups_dir}: {e}")
