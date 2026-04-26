@@ -18,14 +18,20 @@ ENV LANG=en_US.UTF-8 \
     TERM=xterm-256color \
     HOME=/home/node \
     PYTHONUNBUFFERED=1 \
-    PATH="/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    PATH="/home/node/.npm-global/bin:/home/node/.local/bin:/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# tmux for session backing; python venv tooling; Claude Code CLI.
+# tmux for session backing; python venv tooling; pipx for user-scoped Python
+# tools; Claude Code CLI.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        tmux ripgrep fzf jq python3-venv ca-certificates \
+        tmux ripgrep fzf jq python3-venv pipx ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code
+
+# uv — fast Python package/tool installer. Single static binary, system-wide.
+# UV_UNMANAGED_INSTALL: skip updater + PATH-edit, install binary into the
+# given dir directly (we want plain /usr/local/bin, not the per-user default).
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 # GitHub CLI — installed for shell-into convenience (running `gh` from
 # Coolify's web terminal, etc). Our application code uses the GitHub
@@ -41,12 +47,12 @@ RUN /usr/bin/install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # Passwordless sudo for node. Also override sudo's secure_path so that
-# `claude`, `gh`, and other /usr/local/share/npm-global/bin tools are on
-# PATH for the node user — otherwise sudo's default secure_path strips
-# them out even with `-E`.
+# `claude`, `gh`, `uv`, and other tools (system-wide + user-scoped under
+# ~/.npm-global, ~/.local) are on PATH for the node user — otherwise sudo's
+# default secure_path strips them out even with `-E`.
 RUN printf '%s\n' \
     'node ALL=(ALL) NOPASSWD: ALL' \
-    'Defaults:node secure_path="/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+    'Defaults:node secure_path="/home/node/.npm-global/bin:/home/node/.local/bin:/usr/local/share/npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
     > /etc/sudoers.d/node \
     && chmod 0440 /etc/sudoers.d/node
 
@@ -55,8 +61,10 @@ RUN python3 -m venv /opt/rcl \
     && /opt/rcl/bin/pip install --no-cache-dir \
         fastapi 'uvicorn[standard]' python-multipart jinja2 httpx
 
-# App code.
+# App code + seed files (CLAUDE.md template, etc) the entrypoint copies into
+# the persistent home volume on first boot.
 COPY app /opt/rcl/app
+COPY seed /opt/rcl/seed
 
 # Build-time sanity: app imports cleanly (catches missing deps / syntax
 # errors at BUILD time instead of crash-loop at runtime).
@@ -71,14 +79,51 @@ echo "=== rc-launcher boot ==="
 id
 locale 2>/dev/null | head
 echo "TERM=$TERM LANG=$LANG HOME=$HOME"
-which bash python3 claude gh tmux git node npm
+which bash python3 claude gh tmux git node npm uv pipx
 claude --version 2>&1 || echo "claude: missing"
 gh --version 2>&1 | head -1 || echo "gh: missing"
+uv --version 2>&1 || echo "uv: missing"
+pipx --version 2>&1 || echo "pipx: missing"
 /opt/rcl/bin/python3 -c "import fastapi,uvicorn; print('fastapi', fastapi.__version__, 'uvicorn', uvicorn.__version__)"
-echo "=== end boot ==="
 
-# Repair volume ownership.
+# Optional extra apt packages — install on every boot since /var/lib/dpkg
+# isn't on a persistent volume. Whitespace-separated list.
+if [ -n "$APT_EXTRA_PACKAGES" ]; then
+  echo "--- installing APT_EXTRA_PACKAGES: $APT_EXTRA_PACKAGES ---"
+  sudo apt-get update \
+    && sudo apt-get install -y --no-install-recommends $APT_EXTRA_PACKAGES \
+    && sudo rm -rf /var/lib/apt/lists/* \
+    || echo "APT_EXTRA_PACKAGES install failed (continuing)"
+fi
+
+# Repair volume ownership FIRST so subsequent `cp`/`mkdir` as node can write
+# (volumes start root-owned on first mount).
 sudo chown -R node:node /home/node /workspace /var/lib/rcl 2>/dev/null || true
+
+# Seed /home/node from /etc/skel on first boot. The home volume starts empty
+# on a fresh deploy; without skel the node user has no .bashrc/.profile.
+# Detect "empty" via missing .bashrc; never overwrite an existing home.
+if [ ! -f /home/node/.bashrc ]; then
+  echo "--- seeding /home/node from /etc/skel (first boot) ---"
+  cp -an /etc/skel/. /home/node/ 2>/dev/null || true
+fi
+
+# Redirect npm's global prefix into the home volume so `npm i -g X` at
+# runtime persists across redeploys (system /usr/local prefix vanishes).
+if [ ! -f /home/node/.npmrc ] || ! grep -q '^prefix=' /home/node/.npmrc 2>/dev/null; then
+  echo "prefix=/home/node/.npm-global" >> /home/node/.npmrc
+fi
+mkdir -p /home/node/.npm-global
+
+# Seed ~/.claude/CLAUDE.md from the bundled template on first boot. Never
+# overwrite — the template header tells the user it's safe to edit and won't
+# be touched on redeploy.
+mkdir -p /home/node/.claude
+if [ ! -f /home/node/.claude/CLAUDE.md ]; then
+  echo "--- seeding ~/.claude/CLAUDE.md from template ---"
+  cp /opt/rcl/seed/CLAUDE.md /home/node/.claude/CLAUDE.md
+fi
+echo "=== end boot ==="
 
 exec sudo -u node -E HOME=/home/node \
     /opt/rcl/bin/uvicorn --app-dir /opt/rcl app.main:app \

@@ -15,6 +15,10 @@ services:
       - SERVICE_FQDN_RCL_8080
       - RCL_USERNAME=admin
       - RCL_PASSWORD=$SERVICE_PASSWORD_ADMIN
+      # Whitespace-separated list of extra apt packages installed on each
+      # boot. Convenient for occasional needs without rebuilding the image.
+      # Heavy / always-needed packages should go in the Dockerfile instead.
+      - APT_EXTRA_PACKAGES=
     expose:
       - "8080"
     labels:
@@ -28,12 +32,18 @@ services:
       - traefik.http.routers.rcl-http.priority=1
       - traefik.http.services.rcl-http.loadbalancer.server.port=8080
     volumes:
+      # Full home volume so user-installed tools (uv tool install, pipx,
+      # cargo, npm i -g via redirected prefix, dotfiles) persist across
+      # redeploys. The .claude subdir gets its own volume on top of this so
+      # credentials/conversation history are independently snapshottable.
+      - home:/home/node
       - claude:/home/node/.claude
       - workspace:/workspace
       - data:/var/lib/rcl
     restart: unless-stopped
 
 volumes:
+  home:
   claude:
   workspace:
   data:
