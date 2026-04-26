@@ -56,6 +56,15 @@ RUN printf '%s\n' \
     > /etc/sudoers.d/node \
     && chmod 0440 /etc/sudoers.d/node
 
+# Profile snippet: prepend per-user bin dirs to PATH for interactive shells.
+# /etc/profile reads everything in profile.d, so this fires for both
+# `bash -l` (sudo -i, ssh, web terminal) and zsh's compat path.
+RUN printf '%s\n' \
+    '# rc-launcher: prepend per-user bin dirs (npm i -g X, pipx, uv tool, cargo)' \
+    'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"' \
+    > /etc/profile.d/rcl-user-paths.sh \
+    && chmod 0644 /etc/profile.d/rcl-user-paths.sh
+
 # Python venv with everything the app needs.
 RUN python3 -m venv /opt/rcl \
     && /opt/rcl/bin/pip install --no-cache-dir \

@@ -121,33 +121,6 @@ def diag_claude_home(_user: str = Depends(require_auth)) -> JSONResponse:
     return JSONResponse(out)
 
 
-@app.get("/api/diag/devenv")
-async def diag_devenv(_user: str = Depends(require_auth)) -> JSONResponse:
-    """One-shot Round 2 verification: confirm runtime tools resolve as the
-    node user (PATH + sudoers secure_path), home volume seeded, npmrc prefix
-    redirected. Remove once verified."""
-    import asyncio
-    home = Path("/home/node")
-
-    async def run(cmd: str) -> dict:
-        proc = await asyncio.create_subprocess_shell(
-            f"sudo -u node -E HOME=/home/node bash -lc {cmd!r}",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-        )
-        out, _ = await proc.communicate()
-        return {"rc": proc.returncode, "out": out.decode(errors="replace").strip()}
-
-    return JSONResponse({
-        "home_entries": sorted(p.name for p in home.iterdir()) if home.exists() else None,
-        "npmrc": (home / ".npmrc").read_text() if (home / ".npmrc").exists() else None,
-        "uv_version": await run("uv --version"),
-        "pipx_version": await run("pipx --version"),
-        "claude_version": await run("claude --version"),
-        "npm_prefix": await run("npm config get prefix"),
-        "whoami": await run("whoami && echo PATH=$PATH"),
-    })
-
-
 # ── Claude login flow ──────────────────────────────────────────────────────
 
 

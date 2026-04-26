@@ -4,17 +4,21 @@
 
 You are running inside an `rc-launcher` container on a Coolify-hosted
 server, not on a developer's laptop. The end user is interacting with
-you via the **Claude mobile app** (iOS/Android) over Remote Control —
-they do NOT see the raw terminal output and they have a small screen.
+you via the **native Claude app** over Remote Control — most often the
+mobile app (iOS/Android), occasionally the tablet or desktop app. They
+do NOT see this terminal directly; they only see what arrives in the
+Claude app chat UI.
 
 ## Behavior implications
 
-- Be terse. Mobile users have limited screen real estate and slow scroll.
+- Default to terse output. You don't know the screen size — it could be
+  a phone or a 27" monitor — but terse-by-default works on both, while
+  verbose-by-default is painful on the small end.
 - Prefer summaries over verbose dumps. If you must show a large file or
   output, summarize first and offer to show the full thing on request.
 - Avoid ASCII art / box drawings — they wrap badly on phones.
-- Don't try to open browsers, GUIs, or anything visual — only the user's
-  phone is "visible," and only via the Claude app's chat UI.
+- Don't try to open browsers, GUIs, or anything visual — only the
+  Claude app chat UI is "visible" to the user.
 
 ## Environment layout
 

@@ -80,12 +80,73 @@
     .repo .badge.archived { background: #2a1515; color: var(--err); }
     .repo .badge.fork { background: #1a2a1f; color: #86efac; }
     .stats { color: var(--muted); font-size: 0.85em; margin-bottom: 0.8em; }
+    .paste-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1em 1.1em;
+      margin: 0 0 1.5em;
+    }
+    .paste-card h2 {
+      font-size: 1em;
+      font-weight: 600;
+      margin: 0 0 0.5em;
+    }
+    .paste-card .hint {
+      color: var(--muted);
+      font-size: 0.85em;
+      margin: 0 0 0.7em;
+    }
+    .paste-row { display: flex; gap: 0.5em; }
+    .paste-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 0.7em 0.9em;
+      font: inherit;
+      color: var(--text);
+      background: #0a0b0c;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      -webkit-appearance: none;
+    }
+    .paste-row button {
+      padding: 0.7em 1.1em;
+      font: inherit;
+      font-weight: 600;
+      color: #001018;
+      background: var(--accent);
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .paste-row button:disabled { opacity: 0.6; cursor: default; }
   </style>
 </head>
 <body>
   {% include "_nav.html" %}
   <main>
-    <h1>Your repos</h1>
+    <h1>Open a repo</h1>
+    <div class="paste-card">
+      <h2>Paste any GitHub URL</h2>
+      <p class="hint">
+        Yours, someone else's, or a fork. Accepts
+        <code>github.com/owner/repo</code>, <code>git@…</code>,
+        <code>owner/repo</code>, or a <code>/tree/branch</code> URL.
+      </p>
+      <form method="post" action="/repos/open">
+        <div class="paste-row">
+          <input type="text" name="ref" required autocomplete="off"
+                 inputmode="url" autocapitalize="none" spellcheck="false"
+                 placeholder="https://github.com/owner/repo">
+          <button type="submit" data-loading-text="Opening…">Open</button>
+        </div>
+      </form>
+      {% if open_error %}
+      <div class="err" style="margin: 0.8em 0 0">{{ open_error }}</div>
+      {% endif %}
+    </div>
+
+    <h2 style="font-size: 1.1em; font-weight: 600; margin: 0 0 0.5em">Your repos</h2>
     {% if error %}
       <div class="err">
         <strong>Could not load repos.</strong>
