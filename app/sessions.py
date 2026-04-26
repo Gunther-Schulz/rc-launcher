@@ -468,40 +468,46 @@ async def start_session(
     # Capture the pane's output to a log file. Catches the URL line
     # that claude prints, plus anything else (errors, prompts).
     pipe_cmd = f"cat > {shlex.quote(str(log_path))}"
-    pp_rc, _, pp_err = await _run(
+    pp_rc, pp_out, pp_err = await _run(
         "tmux", "pipe-pane", "-t", tmux_name, pipe_cmd,
     )
-    if pp_rc != 0:
-        _log(f"start_session({sid}): pipe-pane rc={pp_rc}: {pp_err.strip()[:200]}")
+    _log(f"start_session({sid}): pipe-pane rc={pp_rc} out={pp_out.strip()!r} err={pp_err.strip()!r}")
 
-    # Now send the claude command into the running shell. With
-    # --debug-file, claude writes its own diagnostic log we can surface
-    # if things go wrong.
-    #
-    # Two send-keys calls: the first uses -l (literal) so that strings
-    # like '--debug-file' aren't parsed as send-keys flags, and so that
-    # 'Enter' inside the cmd would be sent as letters not RETURN. The
-    # second sends the actual Enter key to execute.
-    claude_cmd = f"claude remote-control --debug-file {shlex.quote(str(debug_path))}"
-    sk_rc, _, sk_err = await _run(
-        "tmux", "send-keys", "-l", "-t", tmux_name, claude_cmd,
+    # CANARY: send a marker first to prove send-keys works at all.
+    # If this echo appears in the pane, send-keys is fine and the
+    # claude command's failure is downstream. If it doesn't appear,
+    # send-keys itself is broken in this environment.
+    canary = "echo RCL_CANARY=$RANDOM"
+    c1_rc, c1_out, c1_err = await _run(
+        "tmux", "send-keys", "-l", "-t", tmux_name, canary,
     )
-    if sk_rc != 0:
-        sess.state = "error"
-        sess.error = f"send-keys (text) rc={sk_rc}: {sk_err.strip()[:200]}"
-        save_session(sess)
-        _log(f"start_session({sid}): {sess.error}")
-        return sess
-    sk_rc, _, sk_err = await _run(
+    _log(f"start_session({sid}): send-keys canary text rc={c1_rc} out={c1_out.strip()!r} err={c1_err.strip()!r}")
+    c2_rc, c2_out, c2_err = await _run(
         "tmux", "send-keys", "-t", tmux_name, "Enter",
     )
+    _log(f"start_session({sid}): send-keys canary Enter rc={c2_rc} out={c2_out.strip()!r} err={c2_err.strip()!r}")
+
+    # Then the actual claude command.
+    claude_cmd = f"claude remote-control --debug-file {shlex.quote(str(debug_path))}"
+    sk_rc, sk_out, sk_err = await _run(
+        "tmux", "send-keys", "-l", "-t", tmux_name, claude_cmd,
+    )
+    _log(f"start_session({sid}): send-keys claude text rc={sk_rc} out={sk_out.strip()!r} err={sk_err.strip()!r}")
     if sk_rc != 0:
         sess.state = "error"
-        sess.error = f"send-keys (Enter) rc={sk_rc}: {sk_err.strip()[:200]}"
+        sess.error = f"send-keys (claude text) rc={sk_rc}: {sk_err.strip()[:200]}"
         save_session(sess)
-        _log(f"start_session({sid}): {sess.error}")
         return sess
-    _log(f"start_session({sid}): sent claude cmd ({len(claude_cmd)} chars)")
+    sk_rc, sk_out, sk_err = await _run(
+        "tmux", "send-keys", "-t", tmux_name, "Enter",
+    )
+    _log(f"start_session({sid}): send-keys claude Enter rc={sk_rc} out={sk_out.strip()!r} err={sk_err.strip()!r}")
+    if sk_rc != 0:
+        sess.state = "error"
+        sess.error = f"send-keys (claude Enter) rc={sk_rc}: {sk_err.strip()[:200]}"
+        save_session(sess)
+        return sess
+    _log(f"start_session({sid}): sent claude cmd ({len(claude_cmd)} chars), DONE")
 
     # Don't block — return so the UI can show "Starting…". Client-side
     # poll on /sessions/{id}/refresh will pick up the URL when claude
