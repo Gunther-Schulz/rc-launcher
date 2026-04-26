@@ -54,4 +54,39 @@
     background: #4a4d52;
   }
   .rcl-nav .dot.ok { background: #86efac; }
+
+  /* Submit feedback — disabled button + waiting cursor + pulsing dots */
+  .rcl-busy {
+    opacity: 0.65;
+    cursor: wait !important;
+    pointer-events: none;
+  }
+  @keyframes rcl-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+  .rcl-busy::after {
+    content: '…';
+    display: inline-block;
+    margin-left: 0.15em;
+    animation: rcl-pulse 1s ease-in-out infinite;
+  }
 </style>
+<script>
+  // Auto-disable submit buttons + swap text to "loading-text" or default
+  // when the user clicks. Works for the (rare) double-tap case too because
+  // pointer-events:none also blocks the second click.
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    var btn = form.querySelector(
+      'button[type=submit]:not([disabled]), button:not([disabled])'
+    );
+    if (!btn) return;
+    var loadingText = btn.getAttribute('data-loading-text') || 'Working';
+    btn.dataset.originalText = btn.textContent;
+    btn.textContent = loadingText;
+    btn.disabled = true;
+    btn.classList.add('rcl-busy');
+  }, true);
+</script>

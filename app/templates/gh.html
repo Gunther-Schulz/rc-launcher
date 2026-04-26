@@ -108,7 +108,7 @@
         </p>
       </div>
       <form method="post" action="/gh/logout">
-        <button type="submit">Log out</button>
+        <button type="submit" data-loading-text="Logging out">Log out</button>
       </form>
       <p class="muted" style="font-size: 0.85em; margin-top: 0.8em">
         Logging out only deletes the token from this server — it does NOT
@@ -138,7 +138,7 @@
           <textarea name="token" placeholder="ghp_..." autocomplete="off"
                     autocapitalize="off" autocorrect="off" spellcheck="false" required></textarea>
           <div style="margin-top: 0.6em" class="row">
-            <button type="submit" class="primary">Save token</button>
+            <button type="submit" class="primary" data-loading-text="Validating with GitHub">Save token</button>
             <span class="muted" style="font-size: 0.85em">
               Token is validated with <code>GET /user</code> before saving.
             </span>

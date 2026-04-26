@@ -129,10 +129,10 @@
       {% endif %}
       <div class="row">
         <form method="post" action="/claude/verify">
-          <button type="submit" class="primary">Verify (call Claude)</button>
+          <button type="submit" class="primary" data-loading-text="Calling Claude">Verify (call Claude)</button>
         </form>
         <form method="post" action="/claude/logout">
-          <button type="submit">Log out</button>
+          <button type="submit" data-loading-text="Logging out">Log out</button>
         </form>
       </div>
       <p class="muted" style="font-size: 0.85em; margin-top: 1em">
@@ -154,7 +154,7 @@
                  inputmode="text" autocapitalize="off" autocorrect="off"
                  autocomplete="off" spellcheck="false" required>
           <div style="margin-top: 0.8em" class="row">
-            <button type="submit" class="primary">Submit code</button>
+            <button type="submit" class="primary" data-loading-text="Verifying code">Submit code</button>
             <span class="muted" style="font-size: 0.85em">
               Completes login and saves credentials.
             </span>
@@ -162,7 +162,7 @@
         </form>
       </div>
       <form method="post" action="/claude/login/start">
-        <button type="submit">Restart (get a fresh URL)</button>
+        <button type="submit" data-loading-text="Restarting">Restart (get a fresh URL)</button>
       </form>
       <p class="muted" style="font-size: 0.85em; margin-top: 0.5em">
         Use Restart if your URL was rejected or you took longer than ~10 min.
@@ -182,7 +182,7 @@
         {% endif %}
       </div>
       <form method="post" action="/claude/login/start">
-        <button type="submit" class="primary">Try again</button>
+        <button type="submit" class="primary" data-loading-text="Spawning claude login">Try again</button>
       </form>
     {% else %}
       <p class="muted">
@@ -190,7 +190,7 @@
         on the server and captures its OAuth URL.
       </p>
       <form method="post" action="/claude/login/start">
-        <button type="submit" class="primary">Log in to Claude</button>
+        <button type="submit" class="primary" data-loading-text="Spawning claude login">Log in to Claude</button>
       </form>
     {% endif %}
   </main>
