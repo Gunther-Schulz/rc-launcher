@@ -81,6 +81,28 @@ def health(_user: str = Depends(require_auth)) -> JSONResponse:
     return JSONResponse({"ok": True, "phase": 3})
 
 
+@app.get("/api/diag/claude-home")
+def diag_claude_home(_user: str = Depends(require_auth)) -> JSONResponse:
+    """Snapshot of /home/node/.claude — diagnostic, may be removed later."""
+    from pathlib import Path
+    base = Path("/home/node/.claude")
+    out: dict = {"exists": base.exists(), "entries": []}
+    if base.exists():
+        for p in sorted(base.iterdir()):
+            try:
+                stat = p.stat()
+                out["entries"].append({
+                    "name": p.name,
+                    "type": "dir" if p.is_dir() else "file",
+                    "size": stat.st_size if p.is_file() else None,
+                })
+            except OSError as e:
+                out["entries"].append({"name": p.name, "error": str(e)})
+    out["claude_md_exists"] = (base / "CLAUDE.md").exists()
+    out["claude_dotjson_exists"] = Path("/home/node/.claude.json").exists()
+    return JSONResponse(out)
+
+
 # ── Claude login flow ──────────────────────────────────────────────────────
 
 
@@ -178,7 +200,11 @@ async def gh_logout_route(_user: str = Depends(require_auth)):
 
 
 @app.get("/repos", response_class=HTMLResponse)
-async def repos_page(request: Request, _user: str = Depends(require_auth)):
+async def repos_page(
+    request: Request,
+    _user: str = Depends(require_auth),
+    open_error: Optional[str] = None,
+):
     token = gh_login.get_token()
     if not token:
         return RedirectResponse(url="/gh", status_code=303)
@@ -193,8 +219,33 @@ async def repos_page(request: Request, _user: str = Depends(require_auth)):
     return templates.TemplateResponse(
         request=request,
         name="repos.html",
-        context={"repos": repos, "error": error, **_nav_ctx("repos")},
+        context={
+            "repos": repos,
+            "error": error,
+            "open_error": open_error,
+            **_nav_ctx("repos"),
+        },
     )
+
+
+@app.post("/repos/open")
+async def repos_open(
+    _user: str = Depends(require_auth),
+    ref: str = Form(...),
+):
+    """Parse a pasted GitHub URL/shorthand → redirect to /repos/{owner}/{repo}."""
+    parsed = github_api.parse_repo_ref(ref)
+    if not parsed:
+        from urllib.parse import urlencode
+        msg = (
+            f"Could not parse {ref!r} as a GitHub repo. "
+            "Expected formats: https://github.com/owner/repo, "
+            "git@github.com:owner/repo, or just owner/repo."
+        )
+        qs = urlencode({"open_error": msg})
+        return RedirectResponse(url=f"/repos?{qs}", status_code=303)
+    owner, repo = parsed
+    return RedirectResponse(url=f"/repos/{owner}/{repo}", status_code=303)
 
 
 @app.get("/repos/{owner}/{repo}", response_class=HTMLResponse)

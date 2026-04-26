@@ -1,6 +1,7 @@
 """Thin httpx wrapper around the parts of the GitHub REST API we need."""
 from __future__ import annotations
 
+import re
 import sys
 import time
 from typing import Optional
@@ -61,46 +62,100 @@ def _interpret_error(r: httpx.Response) -> GitHubError:
     return GitHubError(r.status_code, f"GitHub returned {r.status_code}: {gh_msg}")
 
 
+_LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
+
+
+def _parse_link_next(link_header: str) -> Optional[str]:
+    """Return the `next` URL from an RFC-5988 Link header, or None."""
+    if not link_header:
+        return None
+    m = _LINK_NEXT_RE.search(link_header)
+    return m.group(1) if m else None
+
+
+# Max repos we'll ever fetch — sanity cap to prevent runaway pagination
+# for accounts with thousands of accessible repos.
+MAX_REPOS = 500
+
+
 async def list_repos(token: str, per_page: int = 100) -> list[dict]:
     """List repos accessible to the token. Sorted by most recently pushed.
 
-    Currently fetches just the first page — most personal accounts have
-    <100 repos. If the user reports truncation we'll add pagination via
-    Link-header walking.
+    Walks Link `rel="next"` pages until the API stops or we hit MAX_REPOS.
     """
-    url = f"{GITHUB_API}/user/repos"
-    params = {
+    url: Optional[str] = f"{GITHUB_API}/user/repos"
+    params: Optional[dict] = {
         "sort": "pushed",
         "direction": "desc",
         "per_page": per_page,
         "affiliation": "owner,collaborator,organization_member",
     }
-    _log(f"list_repos: GET {url} (per_page={per_page})")
+    out: list[dict] = []
+    pages = 0
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(url, params=params, headers=_headers(token))
-    if r.status_code != 200:
-        raise _interpret_error(r)
-    data = r.json()
-    if not isinstance(data, list):
-        raise GitHubError(500, f"Expected list response from /user/repos, got {type(data).__name__}")
-    _log(f"list_repos: returned {len(data)} repo(s)")
-    # Trim to fields the UI needs — keeps templates skinny + reduces memory
-    return [
-        {
-            "full_name": r["full_name"],
-            "owner": r["owner"]["login"],
-            "name": r["name"],
-            "private": r.get("private", False),
-            "description": r.get("description") or "",
-            "language": r.get("language"),
-            "default_branch": r.get("default_branch", "main"),
-            "pushed_at": r.get("pushed_at"),
-            "html_url": r.get("html_url"),
-            "fork": r.get("fork", False),
-            "archived": r.get("archived", False),
-        }
-        for r in data
-    ]
+        while url and len(out) < MAX_REPOS:
+            pages += 1
+            _log(f"list_repos: GET page {pages}: {url}")
+            r = await client.get(url, params=params, headers=_headers(token))
+            params = None  # subsequent URLs already include their query
+            if r.status_code != 200:
+                raise _interpret_error(r)
+            data = r.json()
+            if not isinstance(data, list):
+                raise GitHubError(
+                    500,
+                    f"Expected list from /user/repos, got {type(data).__name__}",
+                )
+            out.extend(
+                {
+                    "full_name": item["full_name"],
+                    "owner": item["owner"]["login"],
+                    "name": item["name"],
+                    "private": item.get("private", False),
+                    "description": item.get("description") or "",
+                    "language": item.get("language"),
+                    "default_branch": item.get("default_branch", "main"),
+                    "pushed_at": item.get("pushed_at"),
+                    "html_url": item.get("html_url"),
+                    "fork": item.get("fork", False),
+                    "archived": item.get("archived", False),
+                }
+                for item in data
+            )
+            url = _parse_link_next(r.headers.get("Link", ""))
+    _log(f"list_repos: returned {len(out)} repo(s) across {pages} page(s)")
+    return out
+
+
+# Patterns to parse a GitHub repo URL or shorthand into (owner, repo).
+# Strips an optional .git suffix and handles paths like /tree/branch.
+_GITHUB_URL_PATTERNS = [
+    # https://github.com/owner/repo[.git][/tree/branch...]
+    re.compile(r"^https?://github\.com/(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+?)(?:\.git)?(?:/.*)?/?$"),
+    # git@github.com:owner/repo[.git]
+    re.compile(r"^git@github\.com:(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+?)(?:\.git)?/?$"),
+    # owner/repo shorthand (no scheme, no slashes after the second segment)
+    re.compile(r"^(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+?)/?$"),
+]
+
+
+def parse_repo_ref(ref: str) -> Optional[tuple[str, str]]:
+    """Extract (owner, repo) from a user-typed GitHub URL or shorthand.
+
+    Returns None if no pattern matches.
+    """
+    ref = ref.strip()
+    for pat in _GITHUB_URL_PATTERNS:
+        m = pat.match(ref)
+        if m:
+            owner = m.group("owner")
+            repo = m.group("repo")
+            # Strip a trailing .git that the lazy regex sometimes leaves on
+            # the repo group when the URL has no path component after it.
+            if repo.endswith(".git"):
+                repo = repo[: -len(".git")]
+            return owner, repo
+    return None
 
 
 async def get_repo(token: str, owner: str, repo: str) -> dict:
