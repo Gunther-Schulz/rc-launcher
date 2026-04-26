@@ -33,16 +33,26 @@ Layout rationale:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import os
 import re
 import shlex
-from dataclasses import dataclass
+import time
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from ._logging import make_logger
 
 WORKSPACE_ROOT = Path("/workspace")
+SESSIONS_DIR = Path(os.environ.get("RCL_DATA_DIR", "/var/lib/rcl/data")) / "sessions"
 _log = make_logger("sessions")
+
+# Strips CSI / OSC ANSI escapes so the URL regex can match cleanly.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+# claude RC prints exactly: "Continue coding in the Claude app or https://claude.ai/code/session_<ULID>"
+_RC_URL_RE = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
 
 
 # ── path helpers ──────────────────────────────────────────────────────────
@@ -264,3 +274,242 @@ async def prep_workspace(
         head_sha=sha,
         head_subject=subj,
     )
+
+
+# ── session lifecycle ─────────────────────────────────────────────────────
+
+
+@dataclass
+class Session:
+    """Persisted session metadata. Source of truth lives at
+    SESSIONS_DIR/<id>/meta.json. tmux is the source of truth for liveness;
+    we sync `state` on each refresh."""
+    id: str
+    owner: str
+    repo: str
+    branch: str
+    tmux_session: str
+    worktree_path: str
+    log_path: str
+    rc_url: Optional[str] = None
+    state: str = "starting"   # starting | running | stopped | error
+    error: Optional[str] = None
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def display_branch(self) -> str:
+        return self.branch
+
+
+def _session_id(owner: str, repo: str, branch: str) -> str:
+    h = hashlib.sha256(f"{owner}/{repo}@{branch}".encode()).hexdigest()
+    return h[:10]
+
+
+def _tmux_name(sid: str) -> str:
+    return f"rcl-{sid}"
+
+
+def _session_dir(sid: str) -> Path:
+    return SESSIONS_DIR / sid
+
+
+def _meta_path(sid: str) -> Path:
+    return _session_dir(sid) / "meta.json"
+
+
+def _log_path(sid: str) -> Path:
+    return _session_dir(sid) / "claude.log"
+
+
+def save_session(s: Session) -> None:
+    s.updated_at = time.time()
+    d = _session_dir(s.id)
+    d.mkdir(parents=True, exist_ok=True)
+    _meta_path(s.id).write_text(json.dumps(asdict(s), indent=2))
+
+
+def load_session(sid: str) -> Optional[Session]:
+    try:
+        data = json.loads(_meta_path(sid).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        _log(f"load_session({sid}): {e}")
+        return None
+    return Session(**data)
+
+
+def list_session_ids() -> list[str]:
+    if not SESSIONS_DIR.exists():
+        return []
+    return sorted(p.name for p in SESSIONS_DIR.iterdir() if p.is_dir())
+
+
+# ── tmux + log scanning ───────────────────────────────────────────────────
+
+
+async def _run(*args: str, timeout: float = 10.0) -> tuple[int, str, str]:
+    """Generic subprocess runner. Used for tmux."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return 124, "", f"timeout after {timeout}s"
+    return (
+        proc.returncode or 0,
+        out_b.decode(errors="replace"),
+        err_b.decode(errors="replace"),
+    )
+
+
+async def tmux_has_session(name: str) -> bool:
+    rc, _, _ = await _run("tmux", "has-session", "-t", name)
+    return rc == 0
+
+
+async def tmux_kill_session(name: str) -> None:
+    await _run("tmux", "kill-session", "-t", name)
+
+
+async def tmux_spawn(name: str, cwd: Path, command: str) -> tuple[int, str]:
+    """Create a detached tmux session named `name` running `command` from
+    cwd. Returns (rc, stderr). stdout is silenced — tmux prints nothing
+    interesting to stdout when -d is set."""
+    rc, _, err = await _run(
+        "tmux", "new-session", "-d", "-s", name, "-c", str(cwd), command,
+        timeout=15.0,
+    )
+    return rc, err
+
+
+def _scan_for_url(log_path: Path) -> Optional[str]:
+    try:
+        raw = log_path.read_text(errors="replace")
+    except FileNotFoundError:
+        return None
+    text = _ANSI_RE.sub("", raw)
+    m = _RC_URL_RE.search(text)
+    return m.group(0) if m else None
+
+
+# ── public API ────────────────────────────────────────────────────────────
+
+
+async def start_session(
+    token: str, owner: str, repo: str, branch: str
+) -> Session:
+    """Idempotent. If a session for (owner, repo, branch) already exists
+    AND its tmux is alive, return it as-is. Otherwise prep workspace,
+    spawn claude remote-control in tmux, return Session(state=starting)."""
+    sid = _session_id(owner, repo, branch)
+    tmux_name = _tmux_name(sid)
+    existing = load_session(sid)
+    if existing and await tmux_has_session(tmux_name):
+        _log(f"start_session: {sid} already running, returning existing")
+        # Try a fresh URL scan in case the previous attempt hadn't found
+        # one yet but it's now in the log.
+        if not existing.rc_url:
+            url = _scan_for_url(Path(existing.log_path))
+            if url:
+                existing.rc_url = url
+                existing.state = "running"
+                save_session(existing)
+        return existing
+
+    # Prep first — surfaces clone/worktree errors before we touch tmux.
+    prep = await prep_workspace(token, owner, repo, branch)
+
+    sess_dir = _session_dir(sid)
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    log_path = _log_path(sid)
+    # Truncate any prior log so we don't match an old URL on restart.
+    log_path.write_text("")
+
+    sess = Session(
+        id=sid,
+        owner=owner,
+        repo=repo,
+        branch=branch,
+        tmux_session=tmux_name,
+        worktree_path=str(prep.worktree_path),
+        log_path=str(log_path),
+    )
+    save_session(sess)
+
+    # Spawn: pipe claude's combined output through tee into our log.
+    # The shell command ensures `tee` survives tmux's TERM signal long
+    # enough to flush — wrapping in bash -c keeps quoting predictable.
+    spawn_cmd = (
+        f"exec claude remote-control 2>&1 "
+        f"| tee {shlex.quote(str(log_path))}"
+    )
+    bash_wrapper = f"bash -c {shlex.quote(spawn_cmd)}"
+    _log(f"start_session({sid}): tmux new-session -s {tmux_name} cwd={prep.worktree_path}")
+    rc, err = await tmux_spawn(tmux_name, prep.worktree_path, bash_wrapper)
+    if rc != 0:
+        sess.state = "error"
+        sess.error = f"tmux spawn failed (rc={rc}): {err.strip()[:300]}"
+        save_session(sess)
+        _log(f"start_session({sid}): {sess.error}")
+        return sess
+
+    # Don't block — return so the UI can show "Starting…". Client-side
+    # poll on /sessions/{id}/refresh will pick up the URL when claude
+    # emits it (typically within 1-2s).
+    return sess
+
+
+async def refresh_session(sid: str) -> Optional[Session]:
+    """Re-read meta, reconcile with tmux liveness + log contents. Returns
+    the updated Session (also persisted) or None if unknown."""
+    sess = load_session(sid)
+    if sess is None:
+        return None
+    alive = await tmux_has_session(sess.tmux_session)
+
+    if not alive:
+        if sess.state in ("starting", "running"):
+            sess.state = "stopped"
+            save_session(sess)
+        return sess
+
+    # tmux alive — try to capture URL if we don't have one yet.
+    if not sess.rc_url:
+        url = _scan_for_url(Path(sess.log_path))
+        if url:
+            sess.rc_url = url
+            sess.state = "running"
+            save_session(sess)
+    elif sess.state != "running":
+        # We have a URL but state drifted — fix.
+        sess.state = "running"
+        save_session(sess)
+    return sess
+
+
+async def stop_session(sid: str) -> bool:
+    sess = load_session(sid)
+    if sess is None:
+        return False
+    await tmux_kill_session(sess.tmux_session)
+    sess.state = "stopped"
+    save_session(sess)
+    return True
+
+
+async def list_sessions() -> list[Session]:
+    """All known sessions, refreshed against tmux state."""
+    sids = list_session_ids()
+    out: list[Session] = []
+    for sid in sids:
+        s = await refresh_session(sid)
+        if s is not None:
+            out.append(s)
+    return out

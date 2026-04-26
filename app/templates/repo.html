@@ -104,12 +104,9 @@
       </p>
     {% endif %}
 
-    {% if prep_msg %}
-      <div class="card{% if not prep_ok %} err{% endif %}" style="margin-top: 1em">
-        <strong>
-          {% if prep_ok %}Workspace prepared{% else %}Workspace prep failed{% endif %}
-          {% if prep_branch %} for <code>{{ prep_branch }}</code>{% endif %}.
-        </strong>
+    {% if prep_msg and not prep_ok %}
+      <div class="card err" style="margin-top: 1em">
+        <strong>Could not start session{% if prep_branch %} for <code>{{ prep_branch }}</code>{% endif %}.</strong>
         <p style="margin: 0.4em 0 0; word-break: break-all">{{ prep_msg }}</p>
       </div>
     {% endif %}
@@ -130,22 +127,22 @@
           {% if repo and b.name == repo.default_branch %}<span class="badge default">default</span>{% endif %}
           {% if b.protected %}<span class="badge">protected</span>{% endif %}
           <span class="badge"><code>{{ b.commit_sha }}</code></span>
-          <form method="post" action="/sessions/prep" style="margin: 0">
+          <form method="post" action="/sessions/start" style="margin: 0">
             <input type="hidden" name="owner" value="{{ owner }}">
             <input type="hidden" name="repo" value="{{ name }}">
             <input type="hidden" name="branch" value="{{ b.name }}">
-            <button type="submit" data-loading-text="Preparing…"
-                    title="Slice 1: clone + worktree only (no claude spawn yet)">
-              Prepare
+            <button type="submit" data-loading-text="Starting…"
+                    title="Clone + worktree + spawn claude remote-control">
+              Start
             </button>
           </form>
         </li>
         {% endfor %}
       </ul>
       <p class="muted" style="font-size: 0.85em; margin-top: 1em">
-        Slice 1 of Phase 5 — Prepare clones the repo and creates a worktree at
-        <code>/workspace/{owner}/{repo}/_wt/&lt;branch&gt;/</code>. The full
-        session start (claude RC spawn) lands in the next slice.
+        Start clones the repo (if needed), creates a worktree, and spawns
+        <code>claude remote-control</code> in a detached tmux session.
+        You'll get a tap-able link to open the Claude app.
       </p>
     {% endif %}
   </main>

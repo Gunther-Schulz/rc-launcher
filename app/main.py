@@ -305,25 +305,86 @@ async def repo_page(
 # ── Session pipeline (Phase 5) ────────────────────────────────────────────
 
 
-@app.post("/sessions/prep")
-async def sessions_prep(
+@app.post("/sessions/start")
+async def sessions_start(
     _user: str = Depends(require_auth),
     owner: str = Form(...),
     repo: str = Form(...),
     branch: str = Form(...),
 ):
-    """Slice 1: clone + worktree only. Confirms the FS pipeline works end
-    to end before tmux/claude is wired up in Slice 2."""
+    """Full pipeline: clone + worktree + spawn claude remote-control in
+    detached tmux. Returns to /sessions/{id} where the page polls for the
+    RC URL as it appears in the log."""
     token = gh_login.get_token()
     if not token:
         return RedirectResponse(url="/gh", status_code=303)
-    qs_base = {"prep_branch": branch}
     try:
-        result = await sessions.prep_workspace(token, owner, repo, branch)
-        msg = f"Worktree ready at {result.worktree_path} — HEAD {result.head_sha[:8]} {result.head_subject}"
-        qs = urlencode({**qs_base, "prep_ok": "1", "prep_msg": msg})
+        sess = await sessions.start_session(token, owner, repo, branch)
     except sessions.PrepError as e:
-        qs = urlencode({**qs_base, "prep_ok": "0", "prep_msg": str(e)})
+        qs = urlencode({"prep_branch": branch, "prep_ok": "0", "prep_msg": str(e)})
+        return RedirectResponse(url=f"/repos/{owner}/{repo}?{qs}", status_code=303)
     except Exception as e:
-        qs = urlencode({**qs_base, "prep_ok": "0", "prep_msg": f"Unexpected: {e}"})
-    return RedirectResponse(url=f"/repos/{owner}/{repo}?{qs}", status_code=303)
+        qs = urlencode({"prep_branch": branch, "prep_ok": "0",
+                        "prep_msg": f"Unexpected: {e}"})
+        return RedirectResponse(url=f"/repos/{owner}/{repo}?{qs}", status_code=303)
+    return RedirectResponse(url=f"/sessions/{sess.id}", status_code=303)
+
+
+@app.get("/sessions", response_class=HTMLResponse)
+async def sessions_list(
+    request: Request,
+    _user: str = Depends(require_auth),
+):
+    items = await sessions.list_sessions()
+    # Sort: running first, then starting, then stopped/error; within each
+    # group most-recent first.
+    order = {"running": 0, "starting": 1, "stopped": 2, "error": 3}
+    items.sort(key=lambda s: (order.get(s.state, 9), -s.updated_at))
+    return templates.TemplateResponse(
+        request=request,
+        name="sessions.html",
+        context={"sessions": items, **_nav_ctx("sessions")},
+    )
+
+
+@app.get("/sessions/{sid}", response_class=HTMLResponse)
+async def session_detail(
+    request: Request,
+    sid: str,
+    _user: str = Depends(require_auth),
+):
+    sess = await sessions.refresh_session(sid)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return templates.TemplateResponse(
+        request=request,
+        name="session.html",
+        context={"sess": sess, **_nav_ctx("sessions")},
+    )
+
+
+@app.get("/sessions/{sid}/refresh")
+async def session_refresh_api(
+    sid: str,
+    _user: str = Depends(require_auth),
+):
+    """Polled by the detail page to pick up the RC URL once claude emits
+    it. Returns the current state + URL as JSON."""
+    sess = await sessions.refresh_session(sid)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return JSONResponse({
+        "state": sess.state,
+        "rc_url": sess.rc_url,
+        "error": sess.error,
+        "updated_at": sess.updated_at,
+    })
+
+
+@app.post("/sessions/{sid}/stop")
+async def session_stop(
+    sid: str,
+    _user: str = Depends(require_auth),
+):
+    await sessions.stop_session(sid)
+    return RedirectResponse(url=f"/sessions/{sid}", status_code=303)
